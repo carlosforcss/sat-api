@@ -1,19 +1,14 @@
-# --- Build stage ---
-FROM rust:latest AS builder
+FROM rust:latest
 
 WORKDIR /app
+
+# Cache dependencies separately from source code.
+# Only re-runs when Cargo.toml/Cargo.lock change.
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir src && echo "fn main() {}" > src/main.rs && cargo build && rm -rf src
+
 COPY . .
-RUN cargo build --release
-
-# --- Runtime stage ---
-FROM debian:bookworm-slim
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libssl3 \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder /app/target/release/sat-api /usr/local/bin/sat-api
 
 EXPOSE 8000
 
-CMD ["sat-api"]
+CMD ["cargo", "run"]

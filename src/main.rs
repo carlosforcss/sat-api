@@ -2,16 +2,30 @@ use axum::{response::Html, routing::get, Json, Router};
 use sqlx::postgres::PgPoolOptions;
 use utoipa::OpenApi;
 
+mod repositories;
 mod routes;
+mod services;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: sqlx::PgPool,
+    pub jwt_secret: String,
 }
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(routes::health::health_check),
+    paths(
+        routes::health::health_check,
+        routes::auth::register,
+        routes::auth::login,
+    ),
+    components(schemas(
+        routes::auth::RegisterRequest,
+        routes::auth::RegisterResponse,
+        routes::auth::LoginRequest,
+        routes::auth::LoginResponse,
+        routes::health::HealthResponse,
+    )),
     info(
         title = "SAT API",
         description = "Web crawling API",
@@ -58,6 +72,7 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let jwt_secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
@@ -70,7 +85,10 @@ async fn main() {
         .await
         .expect("Failed to run migrations");
 
-    let state = AppState { db: pool };
+    let state = AppState {
+        db: pool,
+        jwt_secret,
+    };
 
     let app = Router::new()
         .route("/api/docs", get(swagger_ui))
