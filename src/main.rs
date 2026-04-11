@@ -1,6 +1,9 @@
 use axum::{response::Html, routing::get, Json, Router};
 use sqlx::postgres::PgPoolOptions;
-use utoipa::OpenApi;
+use utoipa::{
+    openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme},
+    Modify, OpenApi,
+};
 
 mod repositories;
 mod routes;
@@ -12,8 +15,27 @@ pub struct AppState {
     pub jwt_secret: String,
 }
 
+struct BearerAuth;
+
+impl Modify for BearerAuth {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        if let Some(components) = openapi.components.as_mut() {
+            components.add_security_scheme(
+                "bearer_auth",
+                SecurityScheme::Http(
+                    HttpBuilder::new()
+                        .scheme(HttpAuthScheme::Bearer)
+                        .bearer_format("JWT")
+                        .build(),
+                ),
+            );
+        }
+    }
+}
+
 #[derive(OpenApi)]
 #[openapi(
+    modifiers(&BearerAuth),
     paths(
         routes::health::health_check,
         routes::auth::register,

@@ -23,9 +23,13 @@ services:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/satcli
       RUST_LOG: info
       JWT_SECRET: change-me-in-production
+    volumes:
+      - .:/app
+      - cargo_cache:/usr/local/cargo/registry
     depends_on:
       postgres:
         condition: service_healthy
 
 volumes:
   postgres_data:
+  cargo_cache:
