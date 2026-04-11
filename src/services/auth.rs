@@ -1,7 +1,7 @@
 use axum::{http::StatusCode, response::IntoResponse, Json};
 use chrono::Utc;
 use jsonwebtoken::{encode, EncodingKey, Header};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::PgPool;
 
@@ -24,10 +24,10 @@ impl IntoResponse for AuthError {
     }
 }
 
-#[derive(Serialize)]
-struct Claims {
-    sub: String,
-    exp: i64,
+#[derive(Serialize, Deserialize)]
+pub struct Claims {
+    pub sub: String,
+    pub exp: i64,
 }
 
 pub async fn register(pool: &PgPool, email: &str, password: &str) -> Result<User, AuthError> {

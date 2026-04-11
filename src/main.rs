@@ -5,6 +5,7 @@ use utoipa::{
     Modify, OpenApi,
 };
 
+mod extractors;
 mod repositories;
 mod routes;
 mod services;
@@ -13,6 +14,7 @@ mod services;
 pub struct AppState {
     pub db: sqlx::PgPool,
     pub jwt_secret: String,
+    pub upload_path: String,
 }
 
 struct BearerAuth;
@@ -40,6 +42,10 @@ impl Modify for BearerAuth {
         routes::health::health_check,
         routes::auth::register,
         routes::auth::login,
+        routes::credential::create_ciec,
+        routes::credential::create_fiel,
+        routes::credential::list_credentials,
+        routes::credential::delete_credential,
     ),
     components(schemas(
         routes::auth::RegisterRequest,
@@ -47,6 +53,8 @@ impl Modify for BearerAuth {
         routes::auth::LoginRequest,
         routes::auth::LoginResponse,
         routes::health::HealthResponse,
+        routes::credential::CreateCiecRequest,
+        routes::credential::CredentialResponse,
     )),
     info(
         title = "SAT API",
@@ -95,6 +103,7 @@ async fn main() {
 
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let jwt_secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
+    let upload_path = std::env::var("UPLOAD_PATH").expect("UPLOAD_PATH must be set");
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
@@ -110,6 +119,7 @@ async fn main() {
     let state = AppState {
         db: pool,
         jwt_secret,
+        upload_path,
     };
 
     let app = Router::new()

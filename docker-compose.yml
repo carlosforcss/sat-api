@@ -23,9 +23,11 @@ services:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/satcli
       RUST_LOG: info
       JWT_SECRET: change-me-in-production
+      UPLOAD_PATH: /data/credentials
     volumes:
       - .:/app
       - cargo_cache:/usr/local/cargo/registry
+      - credentials_data:/data/credentials
     depends_on:
       postgres:
         condition: service_healthy
@@ -33,3 +35,4 @@ services:
 volumes:
   postgres_data:
   cargo_cache:
+  credentials_data:
