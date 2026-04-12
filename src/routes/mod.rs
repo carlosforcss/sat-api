@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod crawl;
 pub mod credential;
 pub mod health;
 
@@ -15,4 +16,6 @@ pub fn router() -> Router<AppState> {
         .route("/credentials/fiel", post(credential::create_fiel))
         .route("/credentials", get(credential::list_credentials))
         .route("/credentials/{id}", axum::routing::delete(credential::delete_credential))
+        .route("/crawls", get(crawl::list_crawls))
+        .route("/crawls/{id}", get(crawl::get_crawl))
 }

@@ -5,6 +5,8 @@ use utoipa::{
     Modify, OpenApi,
 };
 
+mod crawlers;
+mod crypto;
 mod extractors;
 mod repositories;
 mod routes;
@@ -46,6 +48,8 @@ impl Modify for BearerAuth {
         routes::credential::create_fiel,
         routes::credential::list_credentials,
         routes::credential::delete_credential,
+        routes::crawl::list_crawls,
+        routes::crawl::get_crawl,
     ),
     components(schemas(
         routes::auth::RegisterRequest,
@@ -55,6 +59,7 @@ impl Modify for BearerAuth {
         routes::health::HealthResponse,
         routes::credential::CreateCiecRequest,
         routes::credential::CredentialResponse,
+        routes::crawl::CrawlResponse,
     )),
     info(
         title = "SAT API",
@@ -89,6 +94,13 @@ async fn swagger_ui() -> Html<&'static str> {
       presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
       layout: "BaseLayout"
     });
+
+    // Swagger UI dynamically adds readonly to inputs, blocking paste.
+    // Watch for those attributes and remove them immediately.
+    const observer = new MutationObserver(() => {
+      document.querySelectorAll('input[readonly]').forEach(el => el.removeAttribute('readonly'));
+    });
+    observer.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['readonly'] });
   };
 </script>
 </body>

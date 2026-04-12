@@ -17,16 +17,19 @@ services:
 
   api:
     build: .
+    env_file: .env
     ports:
       - "8000:8000"
     environment:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/satcli
-      RUST_LOG: info
-      JWT_SECRET: change-me-in-production
+      RUST_LOG: info,chromiumoxide=off
+      JWT_SECRET: ${JWT_SECRET}
       UPLOAD_PATH: /data/credentials
+      TWOCAPTCHA_API_KEY: ${TWOCAPTCHA_API_KEY}
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY}
     volumes:
       - .:/app
-      - cargo_cache:/usr/local/cargo/registry
+      - cargo_target:/cargo-target
       - credentials_data:/data/credentials
     depends_on:
       postgres:
@@ -34,5 +37,5 @@ services:
 
 volumes:
   postgres_data:
-  cargo_cache:
+  cargo_target:
   credentials_data:

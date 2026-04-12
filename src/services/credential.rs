@@ -6,17 +6,16 @@ use tokio::io::AsyncWriteExt;
 use crate::repositories::credential::{self, Credential};
 
 pub enum CredentialError {
-    AlreadyExists,
     Internal,
 }
 
 impl IntoResponse for CredentialError {
     fn into_response(self) -> axum::response::Response {
-        let (status, message) = match self {
-            CredentialError::AlreadyExists => (StatusCode::CONFLICT, "credential already exists"),
-            CredentialError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
-        };
-        (status, Json(json!({ "error": message }))).into_response()
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "internal error" })),
+        )
+            .into_response()
     }
 }
 
@@ -26,18 +25,21 @@ pub async fn create_ciec(
     rfc: &str,
     password: &str,
 ) -> Result<Credential, CredentialError> {
-    let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|_| CredentialError::Internal)?;
+    let encrypted = crate::crypto::encrypt(password).map_err(|e| {
+        tracing::error!("failed to encrypt CIEC password: {e}");
+        CredentialError::Internal
+    })?;
 
-    credential::create(pool, user_id, rfc, "CIEC", &password_hash, None, None)
+    let cred = credential::create(pool, user_id, rfc, "CIEC", &encrypted, None, None)
         .await
         .map_err(|e| {
-            if let sqlx::Error::Database(ref db_err) = e {
-                if db_err.constraint() == Some("credentials_user_id_rfc_cred_type_key") {
-                    return CredentialError::AlreadyExists;
-                }
-            }
+            tracing::error!("failed to insert CIEC credential: {e}");
             CredentialError::Internal
-        })
+        })?;
+
+    spawn_validate_crawl(pool, cred.id).await;
+
+    Ok(cred)
 }
 
 pub async fn create_fiel(
@@ -49,7 +51,10 @@ pub async fn create_fiel(
     cer_bytes: Vec<u8>,
     key_bytes: Vec<u8>,
 ) -> Result<Credential, CredentialError> {
-    let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|_| CredentialError::Internal)?;
+    let encrypted = crate::crypto::encrypt(password).map_err(|e| {
+        tracing::error!("failed to encrypt FIEL password: {e}");
+        CredentialError::Internal
+    })?;
 
     let dir = format!("{}/{}/{}", upload_path, user_id, rfc);
     tokio::fs::create_dir_all(&dir).await.map_err(|_| CredentialError::Internal)?;
@@ -63,16 +68,45 @@ pub async fn create_fiel(
     let mut key_file = tokio::fs::File::create(&key_path).await.map_err(|_| CredentialError::Internal)?;
     key_file.write_all(&key_bytes).await.map_err(|_| CredentialError::Internal)?;
 
-    credential::create(pool, user_id, rfc, "FIEL", &password_hash, Some(&cer_path), Some(&key_path))
+    let cred = credential::create(pool, user_id, rfc, "FIEL", &encrypted, Some(&cer_path), Some(&key_path))
         .await
         .map_err(|e| {
-            if let sqlx::Error::Database(ref db_err) = e {
-                if db_err.constraint() == Some("credentials_user_id_rfc_cred_type_key") {
-                    return CredentialError::AlreadyExists;
-                }
-            }
+            tracing::error!("failed to insert FIEL credential: {e}");
             CredentialError::Internal
-        })
+        })?;
+
+    spawn_validate_crawl(pool, cred.id).await;
+
+    Ok(cred)
+}
+
+async fn spawn_validate_crawl(pool: &PgPool, credential_id: i32) {
+    match crate::repositories::crawl::create(
+        pool,
+        credential_id,
+        "VALIDATE_CREDENTIALS",
+        serde_json::json!({}),
+    )
+    .await
+    {
+        Ok(crawl) => {
+            let pool_clone = pool.clone();
+            let crawl_id = crawl.id;
+            std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(2)
+                    .enable_all()
+                    .build()
+                    .expect("failed to build crawler runtime");
+                rt.block_on(crate::crawlers::run_crawl(&pool_clone, crawl_id));
+            });
+        }
+        Err(e) => {
+            tracing::error!(
+                "failed to create validation crawl for credential {credential_id}: {e}"
+            );
+        }
+    }
 }
 
 pub async fn delete(pool: &PgPool, id: i32, user_id: i32) -> Result<bool, CredentialError> {

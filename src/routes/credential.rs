@@ -31,7 +31,6 @@ pub struct CredentialResponse {
     request_body = CreateCiecRequest,
     responses(
         (status = 201, description = "CIEC credential created", body = CredentialResponse),
-        (status = 409, description = "Credential already exists"),
         (status = 401, description = "Unauthorized"),
     ),
     security(("bearer_auth" = [])),
@@ -64,7 +63,6 @@ pub async fn create_ciec(
     request_body(content_type = "multipart/form-data", description = "Fields: rfc (text), password (text), cer_file (binary), key_file (binary)"),
     responses(
         (status = 201, description = "FIEL credential created", body = CredentialResponse),
-        (status = 409, description = "Credential already exists"),
         (status = 401, description = "Unauthorized"),
         (status = 400, description = "Missing required fields"),
     ),
