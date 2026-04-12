@@ -2,6 +2,7 @@ pub mod auth;
 pub mod crawl;
 pub mod credential;
 pub mod health;
+pub mod link;
 
 use axum::{
     routing::{get, post},
@@ -22,6 +23,8 @@ pub fn router() -> Router<AppState> {
             "/credentials/{id}",
             axum::routing::delete(credential::delete_credential),
         )
+        .route("/links", post(link::create_link).get(link::list_links))
+        .route("/links/{id}", axum::routing::delete(link::delete_link))
         .route("/crawls", get(crawl::list_crawls).post(crawl::create_crawl))
         .route("/crawls/{id}", get(crawl::get_crawl))
 }

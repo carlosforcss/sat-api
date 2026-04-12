@@ -4,7 +4,7 @@ use satcrawler::{
 };
 use sqlx::PgPool;
 
-use crate::repositories::{crawl as crawl_repo, credential as credential_repo};
+use crate::repositories::{crawl as crawl_repo, credential as credential_repo, link as link_repo};
 
 pub async fn run_crawl(pool: &PgPool, crawl_id: i32) {
     if let Err(e) = execute(pool, crawl_id).await {
@@ -23,10 +23,15 @@ async fn execute(pool: &PgPool, crawl_id: i32) -> Result<(), String> {
         .await
         .map_err(|e| e.to_string())?;
 
-    let credential = credential_repo::find_by_id(pool, crawl.credential_id)
+    let link = link_repo::find_by_id(pool, crawl.link_id)
         .await
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("credential {} not found", crawl.credential_id))?;
+        .ok_or_else(|| format!("link {} not found", crawl.link_id))?;
+
+    let credential = credential_repo::find_by_id(pool, link.credential_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("credential {} not found", link.credential_id))?;
 
     let password = crate::crypto::decrypt(&credential.password).map_err(|e| e.to_string())?;
 
@@ -52,8 +57,8 @@ async fn execute(pool: &PgPool, crawl_id: i32) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     if crawl.crawl_type == "VALIDATE_CREDENTIALS" {
-        let cred_status = if response.success { "VALID" } else { "UNVALID" };
-        credential_repo::update_status(pool, crawl.credential_id, cred_status)
+        let link_status = if response.success { "VALID" } else { "INVALID" };
+        link_repo::update_status(pool, crawl.link_id, link_status)
             .await
             .map_err(|e| e.to_string())?;
     }
@@ -75,7 +80,7 @@ fn build_config(
     CrawlerConfig {
         credentials: SatCredentials {
             login_type,
-            username: credential.rfc.clone(),
+            username: credential.taxpayer_id.clone(),
             password: password.to_string(),
             crt_path: credential.cer_path.clone(),
             key_path: credential.key_path.clone(),

@@ -5,7 +5,7 @@ use sqlx::{FromRow, PgPool};
 pub struct Credential {
     pub id: i32,
     pub user_id: i32,
-    pub rfc: String,
+    pub taxpayer_id: String,
     pub cred_type: String,
     pub status: String,
     pub password: String,
@@ -20,7 +20,7 @@ const SELECT: &str = "SELECT id, user_id, rfc, cred_type::TEXT, status::TEXT, pa
 pub async fn create(
     pool: &PgPool,
     user_id: i32,
-    rfc: &str,
+    taxpayer_id: &str,
     cred_type: &str,
     password: &str,
     cer_path: Option<&str>,
@@ -32,7 +32,7 @@ pub async fn create(
          RETURNING id, user_id, rfc, cred_type::TEXT, status::TEXT, password, cer_path, key_path, created_at, updated_at",
     )
     .bind(user_id)
-    .bind(rfc)
+    .bind(taxpayer_id)
     .bind(cred_type)
     .bind(password)
     .bind(cer_path)

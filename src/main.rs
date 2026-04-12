@@ -51,6 +51,9 @@ impl Modify for BearerAuth {
         routes::crawl::list_crawls,
         routes::crawl::get_crawl,
         routes::crawl::create_crawl,
+        routes::link::create_link,
+        routes::link::list_links,
+        routes::link::delete_link,
     ),
     components(schemas(
         routes::auth::RegisterRequest,
@@ -62,6 +65,8 @@ impl Modify for BearerAuth {
         routes::credential::CredentialResponse,
         routes::crawl::CrawlResponse,
         routes::crawl::CreateCrawlRequest,
+        routes::link::CreateLinkRequest,
+        routes::link::LinkResponse,
     )),
     info(
         title = "SAT API",

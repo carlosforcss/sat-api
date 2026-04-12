@@ -4,7 +4,7 @@ use sqlx::{FromRow, PgPool};
 #[derive(FromRow, Clone)]
 pub struct Crawl {
     pub id: i32,
-    pub credential_id: i32,
+    pub link_id: i32,
     pub crawl_type: String,
     pub status: String,
     pub params: serde_json::Value,
@@ -15,20 +15,20 @@ pub struct Crawl {
     pub updated_at: DateTime<Utc>,
 }
 
-const SELECT: &str = "SELECT id, credential_id, crawl_type::TEXT, status::TEXT, params, response_message, started_at, finished_at, created_at, updated_at FROM crawls";
+const SELECT: &str = "SELECT id, link_id, crawl_type::TEXT, status::TEXT, params, response_message, started_at, finished_at, created_at, updated_at FROM crawls";
 
 pub async fn create(
     pool: &PgPool,
-    credential_id: i32,
+    link_id: i32,
     crawl_type: &str,
     params: serde_json::Value,
 ) -> Result<Crawl, sqlx::Error> {
     sqlx::query_as::<_, Crawl>(
-        "INSERT INTO crawls (credential_id, crawl_type, params)
+        "INSERT INTO crawls (link_id, crawl_type, params)
          VALUES ($1, $2::crawl_type, $3)
-         RETURNING id, credential_id, crawl_type::TEXT, status::TEXT, params, response_message, started_at, finished_at, created_at, updated_at",
+         RETURNING id, link_id, crawl_type::TEXT, status::TEXT, params, response_message, started_at, finished_at, created_at, updated_at",
     )
-    .bind(credential_id)
+    .bind(link_id)
     .bind(crawl_type)
     .bind(params)
     .fetch_one(pool)
@@ -72,24 +72,24 @@ pub async fn set_finished(
 pub async fn list_for_user(
     pool: &PgPool,
     user_id: i32,
-    credential_id_filter: Option<i32>,
+    link_id_filter: Option<i32>,
     crawl_type_filter: Option<&str>,
     status_filter: Option<&str>,
 ) -> Result<Vec<Crawl>, sqlx::Error> {
     sqlx::query_as::<_, Crawl>(
-        "SELECT crawls.id, crawls.credential_id, crawls.crawl_type::TEXT, crawls.status::TEXT,
+        "SELECT crawls.id, crawls.link_id, crawls.crawl_type::TEXT, crawls.status::TEXT,
                 crawls.params, crawls.response_message, crawls.started_at, crawls.finished_at,
                 crawls.created_at, crawls.updated_at
          FROM crawls
-         JOIN credentials ON credentials.id = crawls.credential_id
-         WHERE credentials.user_id = $1
-           AND ($2::INT IS NULL OR crawls.credential_id = $2)
+         JOIN links ON links.id = crawls.link_id
+         WHERE links.user_id = $1
+           AND ($2::INT IS NULL OR crawls.link_id = $2)
            AND ($3::TEXT IS NULL OR crawls.crawl_type::TEXT = $3)
            AND ($4::TEXT IS NULL OR crawls.status::TEXT = $4)
          ORDER BY crawls.created_at DESC",
     )
     .bind(user_id)
-    .bind(credential_id_filter)
+    .bind(link_id_filter)
     .bind(crawl_type_filter)
     .bind(status_filter)
     .fetch_all(pool)
@@ -102,12 +102,12 @@ pub async fn find_by_id_for_user(
     user_id: i32,
 ) -> Result<Option<Crawl>, sqlx::Error> {
     sqlx::query_as::<_, Crawl>(
-        "SELECT crawls.id, crawls.credential_id, crawls.crawl_type::TEXT, crawls.status::TEXT,
+        "SELECT crawls.id, crawls.link_id, crawls.crawl_type::TEXT, crawls.status::TEXT,
                 crawls.params, crawls.response_message, crawls.started_at, crawls.finished_at,
                 crawls.created_at, crawls.updated_at
          FROM crawls
-         JOIN credentials ON credentials.id = crawls.credential_id
-         WHERE crawls.id = $1 AND credentials.user_id = $2",
+         JOIN links ON links.id = crawls.link_id
+         WHERE crawls.id = $1 AND links.user_id = $2",
     )
     .bind(id)
     .bind(user_id)

@@ -28,7 +28,7 @@ services:
       TWOCAPTCHA_API_KEY: ${TWOCAPTCHA_API_KEY}
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY}
     volumes:
-      - .:/app
+      - .:/app:z
       - cargo_target:/cargo-target
       - credentials_data:/data/credentials
     depends_on:

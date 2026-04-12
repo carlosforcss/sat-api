@@ -22,7 +22,7 @@ impl IntoResponse for CredentialError {
 pub async fn create_ciec(
     pool: &PgPool,
     user_id: i32,
-    rfc: &str,
+    taxpayer_id: &str,
     password: &str,
 ) -> Result<Credential, CredentialError> {
     let encrypted = crate::crypto::encrypt(password).map_err(|e| {
@@ -30,23 +30,19 @@ pub async fn create_ciec(
         CredentialError::Internal
     })?;
 
-    let cred = credential::create(pool, user_id, rfc, "CIEC", &encrypted, None, None)
+    credential::create(pool, user_id, taxpayer_id, "CIEC", &encrypted, None, None)
         .await
         .map_err(|e| {
             tracing::error!("failed to insert CIEC credential: {e}");
             CredentialError::Internal
-        })?;
-
-    spawn_validate_crawl(pool, cred.id).await;
-
-    Ok(cred)
+        })
 }
 
 pub async fn create_fiel(
     pool: &PgPool,
     upload_path: &str,
     user_id: i32,
-    rfc: &str,
+    taxpayer_id: &str,
     password: &str,
     cer_bytes: Vec<u8>,
     key_bytes: Vec<u8>,
@@ -56,7 +52,7 @@ pub async fn create_fiel(
         CredentialError::Internal
     })?;
 
-    let dir = format!("{}/{}/{}", upload_path, user_id, rfc);
+    let dir = format!("{}/{}/{}", upload_path, user_id, taxpayer_id);
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|_| CredentialError::Internal)?;
@@ -80,10 +76,10 @@ pub async fn create_fiel(
         .await
         .map_err(|_| CredentialError::Internal)?;
 
-    let cred = credential::create(
+    credential::create(
         pool,
         user_id,
-        rfc,
+        taxpayer_id,
         "FIEL",
         &encrypted,
         Some(&cer_path),
@@ -93,29 +89,7 @@ pub async fn create_fiel(
     .map_err(|e| {
         tracing::error!("failed to insert FIEL credential: {e}");
         CredentialError::Internal
-    })?;
-
-    spawn_validate_crawl(pool, cred.id).await;
-
-    Ok(cred)
-}
-
-async fn spawn_validate_crawl(pool: &PgPool, credential_id: i32) {
-    match crate::repositories::crawl::create(
-        pool,
-        credential_id,
-        "VALIDATE_CREDENTIALS",
-        serde_json::json!({}),
-    )
-    .await
-    {
-        Ok(crawl) => crate::services::crawl::spawn(pool, crawl.id),
-        Err(e) => {
-            tracing::error!(
-                "failed to create validation crawl for credential {credential_id}: {e}"
-            );
-        }
-    }
+    })
 }
 
 pub async fn delete(pool: &PgPool, id: i32, user_id: i32) -> Result<bool, CredentialError> {

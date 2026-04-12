@@ -3,7 +3,7 @@ use serde_json::json;
 use sqlx::PgPool;
 
 use crate::repositories::crawl::Crawl;
-use crate::repositories::{crawl, credential};
+use crate::repositories::{crawl, link};
 
 pub enum CrawlError {
     NotFound,
@@ -21,7 +21,7 @@ impl IntoResponse for CrawlError {
 }
 
 pub struct CrawlFilters {
-    pub credential_id: Option<i32>,
+    pub link_id: Option<i32>,
     pub crawl_type: Option<String>,
     pub status: Option<String>,
 }
@@ -29,16 +29,16 @@ pub struct CrawlFilters {
 pub async fn create(
     pool: &PgPool,
     user_id: i32,
-    credential_id: i32,
+    link_id: i32,
     crawl_type: &str,
     params: serde_json::Value,
 ) -> Result<Crawl, CrawlError> {
-    credential::find_by_id_and_user(pool, credential_id, user_id)
+    link::find_by_id_and_user(pool, link_id, user_id)
         .await
         .map_err(|_| CrawlError::Internal)?
         .ok_or(CrawlError::NotFound)?;
 
-    let crawl = crawl::create(pool, credential_id, crawl_type, params)
+    let crawl = crawl::create(pool, link_id, crawl_type, params)
         .await
         .map_err(|e| {
             tracing::error!("failed to create crawl: {e}");
@@ -70,7 +70,7 @@ pub async fn list(
     crawl::list_for_user(
         pool,
         user_id,
-        filters.credential_id,
+        filters.link_id,
         filters.crawl_type.as_deref(),
         filters.status.as_deref(),
     )

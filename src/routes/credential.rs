@@ -12,14 +12,14 @@ use crate::{extractors::AuthUser, services::credential as credential_service, Ap
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateCiecRequest {
-    pub rfc: String,
+    pub taxpayer_id: String,
     pub password: String,
 }
 
 #[derive(Serialize, ToSchema)]
 pub struct CredentialResponse {
     pub id: i32,
-    pub rfc: String,
+    pub taxpayer_id: String,
     pub cred_type: String,
     pub status: String,
     pub created_at: DateTime<Utc>,
@@ -41,13 +41,13 @@ pub async fn create_ciec(
     auth: AuthUser,
     Json(body): Json<CreateCiecRequest>,
 ) -> Response {
-    match credential_service::create_ciec(&state.db, auth.user_id, &body.rfc, &body.password).await
+    match credential_service::create_ciec(&state.db, auth.user_id, &body.taxpayer_id, &body.password).await
     {
         Ok(cred) => (
             StatusCode::CREATED,
             Json(CredentialResponse {
                 id: cred.id,
-                rfc: cred.rfc,
+                taxpayer_id: cred.taxpayer_id,
                 cred_type: cred.cred_type,
                 status: cred.status,
                 created_at: cred.created_at,
@@ -61,7 +61,7 @@ pub async fn create_ciec(
 #[utoipa::path(
     post,
     path = "/api/credentials/fiel",
-    request_body(content_type = "multipart/form-data", description = "Fields: rfc (text), password (text), cer_file (binary), key_file (binary)"),
+    request_body(content_type = "multipart/form-data", description = "Fields: taxpayer_id (text), password (text), cer_file (binary), key_file (binary)"),
     responses(
         (status = 201, description = "FIEL credential created", body = CredentialResponse),
         (status = 401, description = "Unauthorized"),
@@ -75,15 +75,15 @@ pub async fn create_fiel(
     auth: AuthUser,
     mut multipart: Multipart,
 ) -> Response {
-    let mut rfc: Option<String> = None;
+    let mut taxpayer_id: Option<String> = None;
     let mut password: Option<String> = None;
     let mut cer_bytes: Option<Vec<u8>> = None;
     let mut key_bytes: Option<Vec<u8>> = None;
 
     while let Ok(Some(field)) = multipart.next_field().await {
         match field.name() {
-            Some("rfc") => {
-                rfc = field.text().await.ok();
+            Some("taxpayer_id") => {
+                taxpayer_id = field.text().await.ok();
             }
             Some("password") => {
                 password = field.text().await.ok();
@@ -98,12 +98,12 @@ pub async fn create_fiel(
         }
     }
 
-    let (Some(rfc), Some(password), Some(cer_bytes), Some(key_bytes)) =
-        (rfc, password, cer_bytes, key_bytes)
+    let (Some(taxpayer_id), Some(password), Some(cer_bytes), Some(key_bytes)) =
+        (taxpayer_id, password, cer_bytes, key_bytes)
     else {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "missing required fields: rfc, password, cer_file, key_file" })),
+            Json(serde_json::json!({ "error": "missing required fields: taxpayer_id, password, cer_file, key_file" })),
         )
             .into_response();
     };
@@ -112,7 +112,7 @@ pub async fn create_fiel(
         &state.db,
         &state.upload_path,
         auth.user_id,
-        &rfc,
+        &taxpayer_id,
         &password,
         cer_bytes,
         key_bytes,
@@ -123,7 +123,7 @@ pub async fn create_fiel(
             StatusCode::CREATED,
             Json(CredentialResponse {
                 id: cred.id,
-                rfc: cred.rfc,
+                taxpayer_id: cred.taxpayer_id,
                 cred_type: cred.cred_type,
                 status: cred.status,
                 created_at: cred.created_at,
@@ -151,7 +151,7 @@ pub async fn list_credentials(State(state): State<AppState>, auth: AuthUser) -> 
                 .into_iter()
                 .map(|c| CredentialResponse {
                     id: c.id,
-                    rfc: c.rfc,
+                    taxpayer_id: c.taxpayer_id,
                     cred_type: c.cred_type,
                     status: c.status,
                     created_at: c.created_at,

@@ -15,7 +15,7 @@ use crate::{
 #[derive(Serialize, ToSchema)]
 pub struct CrawlResponse {
     pub id: i32,
-    pub credential_id: i32,
+    pub link_id: i32,
     pub crawl_type: String,
     pub status: String,
     pub params: serde_json::Value,
@@ -29,7 +29,7 @@ impl From<Crawl> for CrawlResponse {
     fn from(c: Crawl) -> Self {
         CrawlResponse {
             id: c.id,
-            credential_id: c.credential_id,
+            link_id: c.link_id,
             crawl_type: c.crawl_type,
             status: c.status,
             params: c.params,
@@ -43,14 +43,14 @@ impl From<Crawl> for CrawlResponse {
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateCrawlRequest {
-    pub credential_id: i32,
+    pub link_id: i32,
     pub crawl_type: String,
     pub params: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, IntoParams)]
 pub struct CrawlQueryParams {
-    pub credential_id: Option<i32>,
+    pub link_id: Option<i32>,
     pub crawl_type: Option<String>,
     pub status: Option<String>,
 }
@@ -72,7 +72,7 @@ pub async fn list_crawls(
     Query(params): Query<CrawlQueryParams>,
 ) -> Response {
     let filters = crawl_service::CrawlFilters {
-        credential_id: params.credential_id,
+        link_id: params.link_id,
         crawl_type: params.crawl_type,
         status: params.status,
     };
@@ -118,7 +118,7 @@ pub async fn get_crawl(
     request_body = CreateCrawlRequest,
     responses(
         (status = 202, description = "Crawl created and started", body = CrawlResponse),
-        (status = 404, description = "Credential not found"),
+        (status = 404, description = "Link not found"),
         (status = 401, description = "Unauthorized"),
     ),
     security(("bearer_auth" = [])),
@@ -133,7 +133,7 @@ pub async fn create_crawl(
     match crawl_service::create(
         &state.db,
         auth.user_id,
-        body.credential_id,
+        body.link_id,
         &body.crawl_type,
         params,
     )
