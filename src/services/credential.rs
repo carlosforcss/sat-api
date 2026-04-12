@@ -57,23 +57,43 @@ pub async fn create_fiel(
     })?;
 
     let dir = format!("{}/{}/{}", upload_path, user_id, rfc);
-    tokio::fs::create_dir_all(&dir).await.map_err(|_| CredentialError::Internal)?;
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(|_| CredentialError::Internal)?;
 
     let cer_path = format!("{}/cert.cer", dir);
     let key_path = format!("{}/private.key", dir);
 
-    let mut cer_file = tokio::fs::File::create(&cer_path).await.map_err(|_| CredentialError::Internal)?;
-    cer_file.write_all(&cer_bytes).await.map_err(|_| CredentialError::Internal)?;
-
-    let mut key_file = tokio::fs::File::create(&key_path).await.map_err(|_| CredentialError::Internal)?;
-    key_file.write_all(&key_bytes).await.map_err(|_| CredentialError::Internal)?;
-
-    let cred = credential::create(pool, user_id, rfc, "FIEL", &encrypted, Some(&cer_path), Some(&key_path))
+    let mut cer_file = tokio::fs::File::create(&cer_path)
         .await
-        .map_err(|e| {
-            tracing::error!("failed to insert FIEL credential: {e}");
-            CredentialError::Internal
-        })?;
+        .map_err(|_| CredentialError::Internal)?;
+    cer_file
+        .write_all(&cer_bytes)
+        .await
+        .map_err(|_| CredentialError::Internal)?;
+
+    let mut key_file = tokio::fs::File::create(&key_path)
+        .await
+        .map_err(|_| CredentialError::Internal)?;
+    key_file
+        .write_all(&key_bytes)
+        .await
+        .map_err(|_| CredentialError::Internal)?;
+
+    let cred = credential::create(
+        pool,
+        user_id,
+        rfc,
+        "FIEL",
+        &encrypted,
+        Some(&cer_path),
+        Some(&key_path),
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("failed to insert FIEL credential: {e}");
+        CredentialError::Internal
+    })?;
 
     spawn_validate_crawl(pool, cred.id).await;
 
@@ -89,18 +109,7 @@ async fn spawn_validate_crawl(pool: &PgPool, credential_id: i32) {
     )
     .await
     {
-        Ok(crawl) => {
-            let pool_clone = pool.clone();
-            let crawl_id = crawl.id;
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(2)
-                    .enable_all()
-                    .build()
-                    .expect("failed to build crawler runtime");
-                rt.block_on(crate::crawlers::run_crawl(&pool_clone, crawl_id));
-            });
-        }
+        Ok(crawl) => crate::services::crawl::spawn(pool, crawl.id),
         Err(e) => {
             tracing::error!(
                 "failed to create validation crawl for credential {credential_id}: {e}"

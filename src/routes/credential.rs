@@ -41,7 +41,8 @@ pub async fn create_ciec(
     auth: AuthUser,
     Json(body): Json<CreateCiecRequest>,
 ) -> Response {
-    match credential_service::create_ciec(&state.db, auth.user_id, &body.rfc, &body.password).await {
+    match credential_service::create_ciec(&state.db, auth.user_id, &body.rfc, &body.password).await
+    {
         Ok(cred) => (
             StatusCode::CREATED,
             Json(CredentialResponse {
@@ -97,7 +98,9 @@ pub async fn create_fiel(
         }
     }
 
-    let (Some(rfc), Some(password), Some(cer_bytes), Some(key_bytes)) = (rfc, password, cer_bytes, key_bytes) else {
+    let (Some(rfc), Some(password), Some(cer_bytes), Some(key_bytes)) =
+        (rfc, password, cer_bytes, key_bytes)
+    else {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": "missing required fields: rfc, password, cer_file, key_file" })),
@@ -141,10 +144,7 @@ pub async fn create_fiel(
     security(("bearer_auth" = [])),
     tag = "Credentials"
 )]
-pub async fn list_credentials(
-    State(state): State<AppState>,
-    auth: AuthUser,
-) -> Response {
+pub async fn list_credentials(State(state): State<AppState>, auth: AuthUser) -> Response {
     match credential_service::list(&state.db, auth.user_id).await {
         Ok(creds) => Json(
             creds

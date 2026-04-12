@@ -1,4 +1,9 @@
-use axum::{extract::State, http::StatusCode, response::{IntoResponse, Response}, Json};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Json,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -67,10 +72,7 @@ pub async fn register(
     ),
     tag = "Auth"
 )]
-pub async fn login(
-    State(state): State<AppState>,
-    Json(body): Json<LoginRequest>,
-) -> Response {
+pub async fn login(State(state): State<AppState>, Json(body): Json<LoginRequest>) -> Response {
     match auth_service::login(&state.db, &state.jwt_secret, &body.email, &body.password).await {
         Ok(token) => Json(LoginResponse { token }).into_response(),
         Err(e) => e.into_response(),

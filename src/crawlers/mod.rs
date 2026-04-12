@@ -1,8 +1,8 @@
-use sqlx::PgPool;
 use satcrawler::{
     Crawler, CrawlerConfig, CrawlerFilters, CrawlerOptions, CrawlerResponse, CrawlerType,
     Credentials as SatCredentials, LoginType,
 };
+use sqlx::PgPool;
 
 use crate::repositories::{crawl as crawl_repo, credential as credential_repo};
 
@@ -28,8 +28,7 @@ async fn execute(pool: &PgPool, crawl_id: i32) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("credential {} not found", crawl.credential_id))?;
 
-    let password = crate::crypto::decrypt(&credential.password)
-        .map_err(|e| e.to_string())?;
+    let password = crate::crypto::decrypt(&credential.password).map_err(|e| e.to_string())?;
 
     let response = match crawl.crawl_type.as_str() {
         "VALIDATE_CREDENTIALS" => validate_credentials(&credential, &password).await?,
@@ -43,7 +42,11 @@ async fn execute(pool: &PgPool, crawl_id: i32) -> Result<(), String> {
         other => return Err(format!("unknown crawl type: {other}")),
     };
 
-    let status = if response.success { "COMPLETED" } else { "FAILED" };
+    let status = if response.success {
+        "COMPLETED"
+    } else {
+        "FAILED"
+    };
     crawl_repo::set_finished(pool, crawl_id, status, Some(&response.message))
         .await
         .map_err(|e| e.to_string())?;
@@ -109,7 +112,9 @@ async fn download_invoices(
 ) -> Result<CrawlerResponse, String> {
     let filters = parse_date_filters(params)?;
     let config = build_config(credential, password, filters);
-    Ok(Crawler::new(CrawlerType::DownloadInvoices, config).run().await)
+    Ok(Crawler::new(CrawlerType::DownloadInvoices, config)
+        .run()
+        .await)
 }
 
 async fn download_issued_invoices(
@@ -137,20 +142,15 @@ async fn download_received_invoices(
 }
 
 fn parse_date_filters(params: &serde_json::Value) -> Result<CrawlerFilters, String> {
-    let start_date = params
-        .get("start_date")
-        .and_then(|v| v.as_str())
-        .map(|s| {
-            satcrawler::parse_date(s).map_err(|e| format!("invalid start_date: {e}"))
-        })
-        .transpose()?;
+    let start_date = match params.get("start_date").and_then(|v| v.as_str()) {
+        Some(s) => Some(satcrawler::parse_date(s).map_err(|e| format!("invalid start_date: {e}"))?),
+        None => Some(satcrawler::parse_date("01/01/2026").expect("default start_date is valid")),
+    };
 
     let end_date = params
         .get("end_date")
         .and_then(|v| v.as_str())
-        .map(|s| {
-            satcrawler::parse_date(s).map_err(|e| format!("invalid end_date: {e}"))
-        })
+        .map(|s| satcrawler::parse_date(s).map_err(|e| format!("invalid end_date: {e}")))
         .transpose()?;
 
     Ok(CrawlerFilters {

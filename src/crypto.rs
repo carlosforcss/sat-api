@@ -35,8 +35,7 @@ fn get_key() -> Result<[u8; 32], CryptoError> {
 /// Returns base64(12-byte-nonce || ciphertext).
 pub fn encrypt(plaintext: &str) -> Result<String, CryptoError> {
     let key = get_key()?;
-    let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|e| CryptoError(e.to_string()))?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| CryptoError(e.to_string()))?;
 
     let mut nonce_bytes = [0u8; 12];
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
@@ -54,8 +53,7 @@ pub fn encrypt(plaintext: &str) -> Result<String, CryptoError> {
 /// Decrypts a value produced by `encrypt`.
 pub fn decrypt(ciphertext_b64: &str) -> Result<String, CryptoError> {
     let key = get_key()?;
-    let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|e| CryptoError(e.to_string()))?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| CryptoError(e.to_string()))?;
 
     let combined = BASE64
         .decode(ciphertext_b64)

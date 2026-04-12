@@ -2,7 +2,8 @@ use axum::{http::StatusCode, response::IntoResponse, Json};
 use serde_json::json;
 use sqlx::PgPool;
 
-use crate::repositories::crawl::{self, Crawl};
+use crate::repositories::crawl::Crawl;
+use crate::repositories::{crawl, credential};
 
 pub enum CrawlError {
     NotFound,
@@ -23,6 +24,42 @@ pub struct CrawlFilters {
     pub credential_id: Option<i32>,
     pub crawl_type: Option<String>,
     pub status: Option<String>,
+}
+
+pub async fn create(
+    pool: &PgPool,
+    user_id: i32,
+    credential_id: i32,
+    crawl_type: &str,
+    params: serde_json::Value,
+) -> Result<Crawl, CrawlError> {
+    credential::find_by_id_and_user(pool, credential_id, user_id)
+        .await
+        .map_err(|_| CrawlError::Internal)?
+        .ok_or(CrawlError::NotFound)?;
+
+    let crawl = crawl::create(pool, credential_id, crawl_type, params)
+        .await
+        .map_err(|e| {
+            tracing::error!("failed to create crawl: {e}");
+            CrawlError::Internal
+        })?;
+
+    spawn(pool, crawl.id);
+
+    Ok(crawl)
+}
+
+pub fn spawn(pool: &PgPool, crawl_id: i32) {
+    let pool_clone = pool.clone();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("failed to build crawler runtime");
+        rt.block_on(crate::crawlers::run_crawl(&pool_clone, crawl_id));
+    });
 }
 
 pub async fn list(

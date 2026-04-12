@@ -31,16 +31,19 @@ pub struct Claims {
 }
 
 pub async fn register(pool: &PgPool, email: &str, password: &str) -> Result<User, AuthError> {
-    let password_hash = bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|_| AuthError::Internal)?;
+    let password_hash =
+        bcrypt::hash(password, bcrypt::DEFAULT_COST).map_err(|_| AuthError::Internal)?;
 
-    user::create(pool, email, &password_hash).await.map_err(|e| {
-        if let sqlx::Error::Database(ref db_err) = e {
-            if db_err.constraint() == Some("users_email_key") {
-                return AuthError::EmailAlreadyExists;
+    user::create(pool, email, &password_hash)
+        .await
+        .map_err(|e| {
+            if let sqlx::Error::Database(ref db_err) = e {
+                if db_err.constraint() == Some("users_email_key") {
+                    return AuthError::EmailAlreadyExists;
+                }
             }
-        }
-        AuthError::Internal
-    })
+            AuthError::Internal
+        })
 }
 
 pub async fn login(

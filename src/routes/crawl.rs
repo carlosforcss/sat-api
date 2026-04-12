@@ -1,5 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
+    http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
@@ -7,7 +8,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-use crate::{extractors::AuthUser, services::crawl as crawl_service, AppState};
+use crate::{
+    extractors::AuthUser, repositories::crawl::Crawl, services::crawl as crawl_service, AppState,
+};
 
 #[derive(Serialize, ToSchema)]
 pub struct CrawlResponse {
@@ -20,6 +23,29 @@ pub struct CrawlResponse {
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+}
+
+impl From<Crawl> for CrawlResponse {
+    fn from(c: Crawl) -> Self {
+        CrawlResponse {
+            id: c.id,
+            credential_id: c.credential_id,
+            crawl_type: c.crawl_type,
+            status: c.status,
+            params: c.params,
+            response_message: c.response_message,
+            started_at: c.started_at,
+            finished_at: c.finished_at,
+            created_at: c.created_at,
+        }
+    }
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct CreateCrawlRequest {
+    pub credential_id: i32,
+    pub crawl_type: String,
+    pub params: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize, IntoParams)]
@@ -55,17 +81,7 @@ pub async fn list_crawls(
         Ok(crawls) => Json(
             crawls
                 .into_iter()
-                .map(|c| CrawlResponse {
-                    id: c.id,
-                    credential_id: c.credential_id,
-                    crawl_type: c.crawl_type,
-                    status: c.status,
-                    params: c.params,
-                    response_message: c.response_message,
-                    started_at: c.started_at,
-                    finished_at: c.finished_at,
-                    created_at: c.created_at,
-                })
+                .map(CrawlResponse::from)
                 .collect::<Vec<_>>(),
         )
         .into_response(),
@@ -91,18 +107,39 @@ pub async fn get_crawl(
     Path(id): Path<i32>,
 ) -> Response {
     match crawl_service::get(&state.db, id, auth.user_id).await {
-        Ok(c) => Json(CrawlResponse {
-            id: c.id,
-            credential_id: c.credential_id,
-            crawl_type: c.crawl_type,
-            status: c.status,
-            params: c.params,
-            response_message: c.response_message,
-            started_at: c.started_at,
-            finished_at: c.finished_at,
-            created_at: c.created_at,
-        })
-        .into_response(),
+        Ok(c) => Json(CrawlResponse::from(c)).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/crawls",
+    request_body = CreateCrawlRequest,
+    responses(
+        (status = 202, description = "Crawl created and started", body = CrawlResponse),
+        (status = 404, description = "Credential not found"),
+        (status = 401, description = "Unauthorized"),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Crawls"
+)]
+pub async fn create_crawl(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<CreateCrawlRequest>,
+) -> Response {
+    let params = body.params.unwrap_or(serde_json::json!({}));
+    match crawl_service::create(
+        &state.db,
+        auth.user_id,
+        body.credential_id,
+        &body.crawl_type,
+        params,
+    )
+    .await
+    {
+        Ok(c) => (StatusCode::ACCEPTED, Json(CrawlResponse::from(c))).into_response(),
         Err(e) => e.into_response(),
     }
 }

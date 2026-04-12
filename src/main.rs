@@ -50,6 +50,7 @@ impl Modify for BearerAuth {
         routes::credential::delete_credential,
         routes::crawl::list_crawls,
         routes::crawl::get_crawl,
+        routes::crawl::create_crawl,
     ),
     components(schemas(
         routes::auth::RegisterRequest,
@@ -60,6 +61,7 @@ impl Modify for BearerAuth {
         routes::credential::CreateCiecRequest,
         routes::credential::CredentialResponse,
         routes::crawl::CrawlResponse,
+        routes::crawl::CreateCrawlRequest,
     )),
     info(
         title = "SAT API",
@@ -140,9 +142,7 @@ async fn main() {
         .nest("/api", routes::router())
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8000")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
 
     tracing::info!("Server listening on http://0.0.0.0:8000");
     tracing::info!("Swagger UI at http://0.0.0.0:8000/api/docs");
