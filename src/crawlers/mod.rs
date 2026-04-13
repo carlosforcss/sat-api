@@ -1,15 +1,76 @@
+use std::sync::Arc;
+
+use async_trait::async_trait;
 use satcrawler::{
     Crawler, CrawlerConfig, CrawlerFilters, CrawlerOptions, CrawlerResponse, CrawlerType,
-    Credentials as SatCredentials, LoginType,
+    Credentials as SatCredentials, InvoiceEvent, InvoiceEventHandler, LoginType,
+    SharedInvoiceEventHandler,
 };
 use sqlx::PgPool;
 
-use crate::repositories::{crawl as crawl_repo, credential as credential_repo, link as link_repo};
+use crate::repositories::{
+    crawl as crawl_repo, credential as credential_repo, invoice as invoice_repo, link as link_repo,
+};
 
 pub async fn run_crawl(pool: &PgPool, crawl_id: i32) {
     if let Err(e) = execute(pool, crawl_id).await {
         tracing::error!("crawl {crawl_id} failed: {e}");
         let _ = crawl_repo::set_finished(pool, crawl_id, "FAILED", Some(&e)).await;
+    }
+}
+
+struct DownloadEventHandler {
+    pool: PgPool,
+    link_id: i32,
+    crawl_id: i32,
+}
+
+#[async_trait]
+impl InvoiceEventHandler for DownloadEventHandler {
+    async fn on_invoice_event(&self, event: InvoiceEvent) {
+        match event {
+            InvoiceEvent::Downloaded { invoice, download_path } => {
+                let result = invoice_repo::create(
+                    &self.pool,
+                    self.link_id,
+                    &invoice.uuid,
+                    &invoice.fiscal_id,
+                    &invoice.issuer_tax_id,
+                    &invoice.issuer_name,
+                    &invoice.receiver_tax_id,
+                    &invoice.receiver_name,
+                    &invoice.issued_at,
+                    &invoice.certified_at,
+                    &invoice.total,
+                    &invoice.invoice_type,
+                    &invoice.invoice_status,
+                    &download_path,
+                )
+                .await;
+
+                match result {
+                    Ok(inv) => tracing::info!(
+                        crawl_id = self.crawl_id,
+                        invoice_id = inv.id,
+                        uuid = %inv.uuid,
+                        "invoice saved"
+                    ),
+                    Err(e) => tracing::error!(
+                        crawl_id = self.crawl_id,
+                        uuid = %invoice.uuid,
+                        "failed to save invoice: {e}"
+                    ),
+                }
+            }
+            InvoiceEvent::Skipped { invoice, download_path } => {
+                tracing::info!(
+                    crawl_id = self.crawl_id,
+                    uuid = %invoice.uuid,
+                    path = %download_path,
+                    "invoice skipped (already exists)"
+                );
+            }
+        }
     }
 }
 
@@ -37,21 +98,36 @@ async fn execute(pool: &PgPool, crawl_id: i32) -> Result<(), String> {
 
     let response = match crawl.crawl_type.as_str() {
         "VALIDATE_CREDENTIALS" => validate_credentials(&credential, &password).await?,
-        "DOWNLOAD_INVOICES" => download_invoices(&credential, &password, &crawl.params).await?,
+        "DOWNLOAD_INVOICES" => {
+            download_invoices(&credential, &password, &crawl.params, pool, crawl.link_id, crawl_id)
+                .await?
+        }
         "DOWNLOAD_ISSUED_INVOICES" => {
-            download_issued_invoices(&credential, &password, &crawl.params).await?
+            download_issued_invoices(
+                &credential,
+                &password,
+                &crawl.params,
+                pool,
+                crawl.link_id,
+                crawl_id,
+            )
+            .await?
         }
         "DOWNLOAD_RECEIVED_INVOICES" => {
-            download_received_invoices(&credential, &password, &crawl.params).await?
+            download_received_invoices(
+                &credential,
+                &password,
+                &crawl.params,
+                pool,
+                crawl.link_id,
+                crawl_id,
+            )
+            .await?
         }
         other => return Err(format!("unknown crawl type: {other}")),
     };
 
-    let status = if response.success {
-        "COMPLETED"
-    } else {
-        "FAILED"
-    };
+    let status = if response.success { "COMPLETED" } else { "FAILED" };
     crawl_repo::set_finished(pool, crawl_id, status, Some(&response.message))
         .await
         .map_err(|e| e.to_string())?;
@@ -69,7 +145,6 @@ async fn execute(pool: &PgPool, crawl_id: i32) -> Result<(), String> {
 fn build_config(
     credential: &crate::repositories::credential::Credential,
     password: &str,
-    filters: CrawlerFilters,
 ) -> CrawlerConfig {
     let login_type = if credential.cred_type == "FIEL" {
         LoginType::Fiel
@@ -89,22 +164,22 @@ fn build_config(
             headless: true,
             sandbox: false,
         },
-        filters,
     }
+}
+
+fn event_handler(pool: &PgPool, link_id: i32, crawl_id: i32) -> SharedInvoiceEventHandler {
+    Arc::new(DownloadEventHandler {
+        pool: pool.clone(),
+        link_id,
+        crawl_id,
+    })
 }
 
 async fn validate_credentials(
     credential: &crate::repositories::credential::Credential,
     password: &str,
 ) -> Result<CrawlerResponse, String> {
-    let config = build_config(
-        credential,
-        password,
-        CrawlerFilters {
-            start_date: None,
-            end_date: None,
-        },
-    );
+    let config = build_config(credential, password);
     Ok(Crawler::new(CrawlerType::ValidateCredentials, config)
         .run()
         .await)
@@ -114,10 +189,15 @@ async fn download_invoices(
     credential: &crate::repositories::credential::Credential,
     password: &str,
     params: &serde_json::Value,
+    pool: &PgPool,
+    link_id: i32,
+    crawl_id: i32,
 ) -> Result<CrawlerResponse, String> {
     let filters = parse_date_filters(params)?;
-    let config = build_config(credential, password, filters);
+    let config = build_config(credential, password);
     Ok(Crawler::new(CrawlerType::DownloadInvoices, config)
+        .with_filters(Some(filters))
+        .with_event_handler(event_handler(pool, link_id, crawl_id))
         .run()
         .await)
 }
@@ -126,10 +206,15 @@ async fn download_issued_invoices(
     credential: &crate::repositories::credential::Credential,
     password: &str,
     params: &serde_json::Value,
+    pool: &PgPool,
+    link_id: i32,
+    crawl_id: i32,
 ) -> Result<CrawlerResponse, String> {
     let filters = parse_date_filters(params)?;
-    let config = build_config(credential, password, filters);
+    let config = build_config(credential, password);
     Ok(Crawler::new(CrawlerType::DownloadIssuedInvoices, config)
+        .with_filters(Some(filters))
+        .with_event_handler(event_handler(pool, link_id, crawl_id))
         .run()
         .await)
 }
@@ -138,10 +223,15 @@ async fn download_received_invoices(
     credential: &crate::repositories::credential::Credential,
     password: &str,
     params: &serde_json::Value,
+    pool: &PgPool,
+    link_id: i32,
+    crawl_id: i32,
 ) -> Result<CrawlerResponse, String> {
     let filters = parse_date_filters(params)?;
-    let config = build_config(credential, password, filters);
+    let config = build_config(credential, password);
     Ok(Crawler::new(CrawlerType::DownloadReceivedInvoices, config)
+        .with_filters(Some(filters))
+        .with_event_handler(event_handler(pool, link_id, crawl_id))
         .run()
         .await)
 }

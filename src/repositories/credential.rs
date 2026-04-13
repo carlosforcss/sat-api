@@ -15,7 +15,7 @@ pub struct Credential {
     pub updated_at: DateTime<Utc>,
 }
 
-const SELECT: &str = "SELECT id, user_id, rfc, cred_type::TEXT, status::TEXT, password, cer_path, key_path, created_at, updated_at FROM credentials";
+const SELECT: &str = "SELECT id, user_id, taxpayer_id, cred_type::TEXT, status::TEXT, password, cer_path, key_path, created_at, updated_at FROM credentials";
 
 pub async fn create(
     pool: &PgPool,
@@ -27,9 +27,9 @@ pub async fn create(
     key_path: Option<&str>,
 ) -> Result<Credential, sqlx::Error> {
     sqlx::query_as::<_, Credential>(
-        "INSERT INTO credentials (user_id, rfc, cred_type, password, cer_path, key_path)
+        "INSERT INTO credentials (user_id, taxpayer_id, cred_type, password, cer_path, key_path)
          VALUES ($1, $2, $3::credential_type, $4, $5, $6)
-         RETURNING id, user_id, rfc, cred_type::TEXT, status::TEXT, password, cer_path, key_path, created_at, updated_at",
+         RETURNING id, user_id, taxpayer_id, cred_type::TEXT, status::TEXT, password, cer_path, key_path, created_at, updated_at",
     )
     .bind(user_id)
     .bind(taxpayer_id)

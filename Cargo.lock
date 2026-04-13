@@ -2188,6 +2188,7 @@ name = "sat-api"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
+ "async-trait",
  "axum",
  "base64",
  "bcrypt",
@@ -2209,7 +2210,7 @@ dependencies = [
 [[package]]
 name = "satcrawler"
 version = "0.0.1"
-source = "git+https://github.com/carlosforcss/sat-cli#016f9e30c522003ee1b84c66be99f2314b1bde19"
+source = "git+https://github.com/carlosforcss/sat-cli#4c03dab3952cbf695522af9a6fb862fc65b8cb84"
 dependencies = [
  "async-trait",
  "base64",

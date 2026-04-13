@@ -21,6 +21,7 @@ jsonwebtoken = "9"
 bcrypt = "0.15"
 chrono = { version = "0.4", features = ["serde"] }
 satcrawler = { git = "https://github.com/carlosforcss/sat-cli", package = "satcrawler" }
+async-trait = "0.1"
 aes-gcm = "0.10"
 hex = "0.4"
 rand = "0.8"
