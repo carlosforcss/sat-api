@@ -3,7 +3,8 @@ use serde_json::json;
 use sqlx::PgPool;
 use tokio::io::AsyncWriteExt;
 
-use crate::repositories::credential::{self, Credential};
+use crate::repositories::credential::Credential;
+use crate::repositories::{crawl as crawl_repo, credential, link as link_repo};
 
 pub enum CredentialError {
     Internal,
@@ -30,12 +31,15 @@ pub async fn create_ciec(
         CredentialError::Internal
     })?;
 
-    credential::create(pool, user_id, taxpayer_id, "CIEC", &encrypted, None, None)
+    let cred = credential::create(pool, user_id, taxpayer_id, "CIEC", &encrypted, None, None)
         .await
         .map_err(|e| {
             tracing::error!("failed to insert CIEC credential: {e}");
             CredentialError::Internal
-        })
+        })?;
+
+    spawn_validate_crawl(pool, &cred);
+    Ok(cred)
 }
 
 pub async fn create_fiel(
@@ -76,7 +80,7 @@ pub async fn create_fiel(
         .await
         .map_err(|_| CredentialError::Internal)?;
 
-    credential::create(
+    let cred = credential::create(
         pool,
         user_id,
         taxpayer_id,
@@ -89,7 +93,67 @@ pub async fn create_fiel(
     .map_err(|e| {
         tracing::error!("failed to insert FIEL credential: {e}");
         CredentialError::Internal
-    })
+    })?;
+
+    spawn_validate_crawl(pool, &cred);
+    Ok(cred)
+}
+
+fn spawn_validate_crawl(pool: &PgPool, cred: &Credential) {
+    let pool = pool.clone();
+    let user_id = cred.user_id;
+    let credential_id = cred.id;
+    let taxpayer_id = cred.taxpayer_id.clone();
+    tokio::spawn(async move {
+        let (link_id, crawl_params) =
+            match link_repo::find_valid_by_user_and_taxpayer_id(&pool, user_id, &taxpayer_id).await
+            {
+                Ok(Some(valid_link)) => {
+                    let old_credential_id = valid_link.credential_id;
+                    if let Err(e) = link_repo::update_credential_and_status(
+                        &pool,
+                        valid_link.id,
+                        credential_id,
+                        "INVALID",
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            "failed to update link {} for new credential: {e}",
+                            valid_link.id
+                        );
+                        return;
+                    }
+                    (
+                        valid_link.id,
+                        serde_json::json!({ "old_credential_id": old_credential_id }),
+                    )
+                }
+                Ok(None) => {
+                    // No VALID link — upsert (creates or updates an INVALID link).
+                    match link_repo::create(&pool, user_id, credential_id, &taxpayer_id).await {
+                        Ok(link) => (link.id, serde_json::json!({})),
+                        Err(e) => {
+                            tracing::error!(
+                                "failed to create link for credential {credential_id}: {e}"
+                            );
+                            return;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("failed to query link for credential {credential_id}: {e}");
+                    return;
+                }
+            };
+
+        match crawl_repo::create(&pool, link_id, "VALIDATE_CREDENTIALS", crawl_params).await {
+            Ok(crawl) => crate::services::crawl::spawn(&pool, crawl.id),
+            Err(e) => {
+                tracing::error!("failed to create validation crawl for link {link_id}: {e}")
+            }
+        }
+    });
 }
 
 pub async fn delete(pool: &PgPool, id: i32, user_id: i32) -> Result<bool, CredentialError> {

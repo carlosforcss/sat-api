@@ -29,7 +29,10 @@ struct DownloadEventHandler {
 impl InvoiceEventHandler for DownloadEventHandler {
     async fn on_invoice_event(&self, event: InvoiceEvent) {
         match event {
-            InvoiceEvent::Downloaded { invoice, download_path } => {
+            InvoiceEvent::Downloaded {
+                invoice,
+                download_path,
+            } => {
                 let result = invoice_repo::create(
                     &self.pool,
                     self.link_id,
@@ -62,7 +65,10 @@ impl InvoiceEventHandler for DownloadEventHandler {
                     ),
                 }
             }
-            InvoiceEvent::Skipped { invoice, download_path } => {
+            InvoiceEvent::Skipped {
+                invoice,
+                download_path,
+            } => {
                 tracing::info!(
                     crawl_id = self.crawl_id,
                     uuid = %invoice.uuid,
@@ -99,8 +105,15 @@ async fn execute(pool: &PgPool, crawl_id: i32) -> Result<(), String> {
     let response = match crawl.crawl_type.as_str() {
         "VALIDATE_CREDENTIALS" => validate_credentials(&credential, &password).await?,
         "DOWNLOAD_INVOICES" => {
-            download_invoices(&credential, &password, &crawl.params, pool, crawl.link_id, crawl_id)
-                .await?
+            download_invoices(
+                &credential,
+                &password,
+                &crawl.params,
+                pool,
+                crawl.link_id,
+                crawl_id,
+            )
+            .await?
         }
         "DOWNLOAD_ISSUED_INVOICES" => {
             download_issued_invoices(
@@ -127,16 +140,44 @@ async fn execute(pool: &PgPool, crawl_id: i32) -> Result<(), String> {
         other => return Err(format!("unknown crawl type: {other}")),
     };
 
-    let status = if response.success { "COMPLETED" } else { "FAILED" };
+    let status = if response.success {
+        "COMPLETED"
+    } else {
+        "FAILED"
+    };
     crawl_repo::set_finished(pool, crawl_id, status, Some(&response.message))
         .await
         .map_err(|e| e.to_string())?;
 
     if crawl.crawl_type == "VALIDATE_CREDENTIALS" {
-        let link_status = if response.success { "VALID" } else { "INVALID" };
-        link_repo::update_status(pool, crawl.link_id, link_status)
-            .await
-            .map_err(|e| e.to_string())?;
+        if response.success {
+            link_repo::update_status(pool, crawl.link_id, "VALID")
+                .await
+                .map_err(|e| e.to_string())?;
+        } else {
+            match crawl
+                .params
+                .get("old_credential_id")
+                .and_then(|v| v.as_i64())
+            {
+                Some(old_id) => {
+                    let old_credential_id = i32::try_from(old_id).map_err(|e| e.to_string())?;
+                    link_repo::update_credential_and_status(
+                        pool,
+                        crawl.link_id,
+                        old_credential_id,
+                        "VALID",
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?;
+                }
+                None => {
+                    link_repo::update_status(pool, crawl.link_id, "INVALID")
+                        .await
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+        }
     }
 
     Ok(())

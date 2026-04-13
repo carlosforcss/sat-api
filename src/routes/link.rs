@@ -10,11 +10,6 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::{extractors::AuthUser, services::link as link_service, AppState};
 
-#[derive(Deserialize, ToSchema)]
-pub struct CreateLinkRequest {
-    pub credential_id: i32,
-}
-
 #[derive(Serialize, ToSchema)]
 pub struct LinkResponse {
     pub id: i32,
@@ -45,39 +40,6 @@ fn default_page() -> i64 {
 }
 fn default_per_page() -> i64 {
     20
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/links",
-    request_body = CreateLinkRequest,
-    responses(
-        (status = 201, description = "Link created", body = LinkResponse),
-        (status = 404, description = "Credential not found"),
-        (status = 401, description = "Unauthorized"),
-    ),
-    security(("bearer_auth" = [])),
-    tag = "Links"
-)]
-pub async fn create_link(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Json(body): Json<CreateLinkRequest>,
-) -> Response {
-    match link_service::create(&state.db, auth.user_id, body.credential_id).await {
-        Ok(lnk) => (
-            StatusCode::CREATED,
-            Json(LinkResponse {
-                id: lnk.id,
-                credential_id: lnk.credential_id,
-                taxpayer_id: lnk.taxpayer_id,
-                status: lnk.status,
-                created_at: lnk.created_at,
-            }),
-        )
-            .into_response(),
-        Err(e) => e.into_response(),
-    }
 }
 
 #[utoipa::path(

@@ -96,7 +96,15 @@ pub async fn list_crawls(
         status: params.status,
     };
 
-    match crawl_service::list(&state.db, auth.user_id, filters, params.page, params.per_page).await {
+    match crawl_service::list(
+        &state.db,
+        auth.user_id,
+        filters,
+        params.page,
+        params.per_page,
+    )
+    .await
+    {
         Ok((crawls, total)) => Json(CrawlPage {
             data: crawls.into_iter().map(CrawlResponse::from).collect(),
             total,

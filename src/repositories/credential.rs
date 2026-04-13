@@ -75,11 +75,10 @@ pub async fn list_by_user(
     limit: i64,
     offset: i64,
 ) -> Result<(Vec<Credential>, i64), sqlx::Error> {
-    let total: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM credentials WHERE user_id = $1")
-            .bind(user_id)
-            .fetch_one(pool)
-            .await?;
+    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM credentials WHERE user_id = $1")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
 
     let rows = sqlx::query_as::<_, Credential>(&format!(
         "{SELECT} WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"

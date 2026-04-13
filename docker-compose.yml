@@ -31,6 +31,7 @@ services:
       - .:/app:z
       - cargo_target:/cargo-target
       - credentials_data:/data/credentials
+      - sat_cli_data:/root/sat-cli
     depends_on:
       postgres:
         condition: service_healthy
@@ -39,3 +40,4 @@ volumes:
   postgres_data:
   cargo_target:
   credentials_data:
+  sat_cli_data:

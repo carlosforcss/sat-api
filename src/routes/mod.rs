@@ -25,7 +25,9 @@ pub fn router() -> Router<AppState> {
             axum::routing::delete(credential::delete_credential),
         )
         .route("/invoices", get(invoice::list_invoices))
-        .route("/links", post(link::create_link).get(link::list_links))
+        .route("/invoices/{invoice_id}/xml", get(invoice::get_invoice_xml))
+        .route("/invoices/{invoice_id}/pdf", get(invoice::get_invoice_pdf))
+        .route("/links", get(link::list_links))
         .route("/links/{id}", axum::routing::delete(link::delete_link))
         .route("/crawls", get(crawl::list_crawls).post(crawl::create_crawl))
         .route("/crawls/{id}", get(crawl::get_crawl))

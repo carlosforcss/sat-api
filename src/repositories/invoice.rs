@@ -48,6 +48,18 @@ pub async fn create(
                                receiver_taxpayer_id, receiver_name, issued_at, certified_at,
                                total, invoice_type, invoice_status, download_path)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         ON CONFLICT (uuid, link_id) DO UPDATE SET
+             fiscal_id            = EXCLUDED.fiscal_id,
+             issuer_taxpayer_id   = EXCLUDED.issuer_taxpayer_id,
+             issuer_name          = EXCLUDED.issuer_name,
+             receiver_taxpayer_id = EXCLUDED.receiver_taxpayer_id,
+             receiver_name        = EXCLUDED.receiver_name,
+             issued_at            = EXCLUDED.issued_at,
+             certified_at         = EXCLUDED.certified_at,
+             total                = EXCLUDED.total,
+             invoice_type         = EXCLUDED.invoice_type,
+             invoice_status       = EXCLUDED.invoice_status,
+             download_path        = EXCLUDED.download_path
          RETURNING id, link_id, uuid, fiscal_id, issuer_taxpayer_id, issuer_name,
                    receiver_taxpayer_id, receiver_name, issued_at, certified_at, total,
                    invoice_type, invoice_status, download_path, created_at",
@@ -66,6 +78,28 @@ pub async fn create(
     .bind(invoice_status)
     .bind(download_path)
     .fetch_one(pool)
+    .await
+}
+
+pub async fn find_by_id_for_user(
+    pool: &PgPool,
+    id: i32,
+    user_id: i32,
+) -> Result<Option<Invoice>, sqlx::Error> {
+    sqlx::query_as::<_, Invoice>(
+        "SELECT invoices.id, invoices.link_id, invoices.uuid, invoices.fiscal_id,
+                invoices.issuer_taxpayer_id, invoices.issuer_name,
+                invoices.receiver_taxpayer_id, invoices.receiver_name,
+                invoices.issued_at, invoices.certified_at, invoices.total,
+                invoices.invoice_type, invoices.invoice_status,
+                invoices.download_path, invoices.created_at
+         FROM invoices
+         JOIN links ON links.id = invoices.link_id
+         WHERE invoices.id = $1 AND links.user_id = $2",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(pool)
     .await
 }
 
@@ -108,7 +142,7 @@ pub async fn list_for_user(
            AND ($3::TEXT IS NULL OR invoices.receiver_taxpayer_id = $3)
            AND ($4::TEXT IS NULL OR invoices.invoice_type = $4)
            AND ($5::TEXT IS NULL OR invoices.invoice_status = $5)
-         ORDER BY invoices.created_at DESC
+         ORDER BY invoices.issued_at DESC
          LIMIT $6 OFFSET $7",
     )
     .bind(user_id)

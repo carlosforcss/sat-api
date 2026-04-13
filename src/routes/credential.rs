@@ -64,7 +64,13 @@ pub async fn create_ciec(
     auth: AuthUser,
     Json(body): Json<CreateCiecRequest>,
 ) -> Response {
-    match credential_service::create_ciec(&state.db, auth.user_id, &body.taxpayer_id, &body.password).await
+    match credential_service::create_ciec(
+        &state.db,
+        auth.user_id,
+        &body.taxpayer_id,
+        &body.password,
+    )
+    .await
     {
         Ok(cred) => (
             StatusCode::CREATED,

@@ -1,5 +1,7 @@
 use axum::{
-    extract::{Query, State},
+    body::Body,
+    extract::{Path, Query, State},
+    http::header,
     response::{IntoResponse, Response},
     Json,
 };
@@ -8,10 +10,8 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::{
-    extractors::AuthUser,
-    repositories::invoice::InvoiceFilters,
-    services::invoice as invoice_service,
-    AppState,
+    extractors::AuthUser, repositories::invoice::InvoiceFilters,
+    services::invoice as invoice_service, AppState,
 };
 
 #[derive(Deserialize, IntoParams)]
@@ -83,7 +83,15 @@ pub async fn list_invoices(
         invoice_status: params.invoice_status,
     };
 
-    match invoice_service::list(&state.db, auth.user_id, filters, params.page, params.per_page).await {
+    match invoice_service::list(
+        &state.db,
+        auth.user_id,
+        filters,
+        params.page,
+        params.per_page,
+    )
+    .await
+    {
         Ok((invoices, total)) => Json(InvoicePage {
             data: invoices
                 .into_iter()
@@ -110,6 +118,66 @@ pub async fn list_invoices(
             per_page: params.per_page,
         })
         .into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/invoices/{invoice_id}/xml",
+    params(("invoice_id" = i32, Path, description = "Invoice ID")),
+    responses(
+        (status = 200, description = "Invoice XML file", content_type = "application/xml"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Not found"),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Invoices"
+)]
+pub async fn get_invoice_xml(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(invoice_id): Path<i32>,
+) -> Response {
+    serve_invoice_file(&state, auth.user_id, invoice_id, "xml", "application/xml").await
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/invoices/{invoice_id}/pdf",
+    params(("invoice_id" = i32, Path, description = "Invoice ID")),
+    responses(
+        (status = 200, description = "Invoice PDF file", content_type = "application/pdf"),
+        (status = 401, description = "Unauthorized"),
+        (status = 404, description = "Not found"),
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Invoices"
+)]
+pub async fn get_invoice_pdf(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(invoice_id): Path<i32>,
+) -> Response {
+    serve_invoice_file(&state, auth.user_id, invoice_id, "pdf", "application/pdf").await
+}
+
+async fn serve_invoice_file(
+    state: &AppState,
+    user_id: i32,
+    invoice_id: i32,
+    extension: &str,
+    content_type: &str,
+) -> Response {
+    match invoice_service::get_invoice_file(&state.db, user_id, invoice_id, extension).await {
+        Ok((bytes, uuid)) => Response::builder()
+            .header(header::CONTENT_TYPE, content_type)
+            .header(
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{uuid}.{extension}\""),
+            )
+            .body(Body::from(bytes))
+            .unwrap(),
         Err(e) => e.into_response(),
     }
 }

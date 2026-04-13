@@ -24,6 +24,10 @@ pub async fn create(
     sqlx::query_as::<_, Link>(
         "INSERT INTO links (user_id, credential_id, taxpayer_id)
          VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, taxpayer_id) DO UPDATE SET
+             credential_id = EXCLUDED.credential_id,
+             status        = 'INVALID'::link_status,
+             updated_at    = NOW()
          RETURNING id, user_id, credential_id, taxpayer_id, status::TEXT, created_at, updated_at",
     )
     .bind(user_id)
@@ -84,13 +88,42 @@ pub async fn delete(pool: &PgPool, id: i32, user_id: i32) -> Result<bool, sqlx::
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn update_status(pool: &PgPool, id: i32, status: &str) -> Result<(), sqlx::Error> {
+pub async fn find_valid_by_user_and_taxpayer_id(
+    pool: &PgPool,
+    user_id: i32,
+    taxpayer_id: &str,
+) -> Result<Option<Link>, sqlx::Error> {
+    sqlx::query_as::<_, Link>(&format!(
+        "{SELECT} WHERE user_id = $1 AND taxpayer_id = $2 AND status = 'VALID'::link_status"
+    ))
+    .bind(user_id)
+    .bind(taxpayer_id)
+    .fetch_optional(pool)
+    .await
+}
+
+pub async fn update_credential_and_status(
+    pool: &PgPool,
+    id: i32,
+    credential_id: i32,
+    status: &str,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE links SET status = $2::link_status, updated_at = NOW() WHERE id = $1",
+        "UPDATE links SET credential_id = $2, status = $3::link_status, updated_at = NOW() WHERE id = $1",
     )
     .bind(id)
+    .bind(credential_id)
     .bind(status)
     .execute(pool)
     .await?;
+    Ok(())
+}
+
+pub async fn update_status(pool: &PgPool, id: i32, status: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE links SET status = $2::link_status, updated_at = NOW() WHERE id = $1")
+        .bind(id)
+        .bind(status)
+        .execute(pool)
+        .await?;
     Ok(())
 }

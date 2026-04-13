@@ -6,16 +6,46 @@ use crate::repositories::invoice::{self, Invoice, InvoiceFilters};
 
 pub enum InvoiceError {
     Internal,
+    NotFound,
 }
 
 impl IntoResponse for InvoiceError {
     fn into_response(self) -> axum::response::Response {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "internal error" })),
-        )
-            .into_response()
+        match self {
+            InvoiceError::Internal => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "internal error" })),
+            )
+                .into_response(),
+            InvoiceError::NotFound => {
+                (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))).into_response()
+            }
+        }
     }
+}
+
+pub async fn get_invoice_file(
+    pool: &PgPool,
+    user_id: i32,
+    invoice_id: i32,
+    extension: &str,
+) -> Result<(Vec<u8>, String), InvoiceError> {
+    let inv = invoice::find_by_id_for_user(pool, invoice_id, user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("failed to fetch invoice {invoice_id}: {e}");
+            InvoiceError::Internal
+        })?
+        .ok_or(InvoiceError::NotFound)?;
+
+    let path = std::path::Path::new(&inv.download_path).join(format!("{}.{}", inv.uuid, extension));
+
+    let bytes = tokio::fs::read(&path).await.map_err(|e| {
+        tracing::error!("failed to read invoice file {:?}: {e}", path);
+        InvoiceError::NotFound
+    })?;
+
+    Ok((bytes, inv.uuid))
 }
 
 pub async fn list(
