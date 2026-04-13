@@ -7,15 +7,23 @@ use crate::repositories::link::Link;
 
 pub enum LinkError {
     Internal,
+    InUse,
 }
 
 impl IntoResponse for LinkError {
     fn into_response(self) -> axum::response::Response {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "internal error" })),
-        )
-            .into_response()
+        match self {
+            LinkError::Internal => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "internal error" })),
+            )
+                .into_response(),
+            LinkError::InUse => (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "link has associated crawls or invoices" })),
+            )
+                .into_response(),
+        }
     }
 }
 
@@ -34,7 +42,18 @@ pub async fn list(
 }
 
 pub async fn delete(pool: &PgPool, id: i32, user_id: i32) -> Result<bool, LinkError> {
-    link::delete(pool, id, user_id)
-        .await
-        .map_err(|_| LinkError::Internal)
+    link::delete(pool, id, user_id).await.map_err(|e| {
+        if is_fk_violation(&e) {
+            LinkError::InUse
+        } else {
+            LinkError::Internal
+        }
+    })
+}
+
+fn is_fk_violation(e: &sqlx::Error) -> bool {
+    matches!(
+        e,
+        sqlx::Error::Database(db) if db.code().as_deref() == Some("23503")
+    )
 }

@@ -86,6 +86,7 @@ pub async fn list_links(
     responses(
         (status = 204, description = "Link deleted"),
         (status = 404, description = "Link not found"),
+        (status = 409, description = "Link has associated crawls or invoices"),
         (status = 401, description = "Unauthorized"),
     ),
     security(("bearer_auth" = [])),

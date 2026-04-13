@@ -207,6 +207,7 @@ pub async fn list_credentials(
     responses(
         (status = 204, description = "Credential deleted"),
         (status = 404, description = "Credential not found"),
+        (status = 409, description = "Credential is in use by a link"),
         (status = 401, description = "Unauthorized"),
     ),
     security(("bearer_auth" = [])),

@@ -8,15 +8,23 @@ use crate::repositories::{crawl as crawl_repo, credential, link as link_repo};
 
 pub enum CredentialError {
     Internal,
+    InUse,
 }
 
 impl IntoResponse for CredentialError {
     fn into_response(self) -> axum::response::Response {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "internal error" })),
-        )
-            .into_response()
+        match self {
+            CredentialError::Internal => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": "internal error" })),
+            )
+                .into_response(),
+            CredentialError::InUse => (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "credential is in use by a link" })),
+            )
+                .into_response(),
+        }
     }
 }
 
@@ -157,9 +165,20 @@ fn spawn_validate_crawl(pool: &PgPool, cred: &Credential) {
 }
 
 pub async fn delete(pool: &PgPool, id: i32, user_id: i32) -> Result<bool, CredentialError> {
-    credential::delete(pool, id, user_id)
-        .await
-        .map_err(|_| CredentialError::Internal)
+    credential::delete(pool, id, user_id).await.map_err(|e| {
+        if is_fk_violation(&e) {
+            CredentialError::InUse
+        } else {
+            CredentialError::Internal
+        }
+    })
+}
+
+fn is_fk_violation(e: &sqlx::Error) -> bool {
+    matches!(
+        e,
+        sqlx::Error::Database(db) if db.code().as_deref() == Some("23503")
+    )
 }
 
 pub async fn list(

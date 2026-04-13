@@ -1,9 +1,21 @@
+use std::sync::{Arc, OnceLock};
+
 use axum::{http::StatusCode, response::IntoResponse, Json};
 use serde_json::json;
 use sqlx::PgPool;
+use tokio::sync::Semaphore;
 
 use crate::repositories::crawl::Crawl;
 use crate::repositories::{crawl, link};
+
+const MAX_CONCURRENT_CRAWLS: usize = 3;
+static CRAWL_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+fn crawl_semaphore() -> Arc<Semaphore> {
+    CRAWL_SEMAPHORE
+        .get_or_init(|| Arc::new(Semaphore::new(MAX_CONCURRENT_CRAWLS)))
+        .clone()
+}
 
 pub enum CrawlError {
     NotFound,
@@ -52,13 +64,17 @@ pub async fn create(
 
 pub fn spawn(pool: &PgPool, crawl_id: i32) {
     let pool_clone = pool.clone();
+    let sem = crawl_semaphore();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
             .build()
             .expect("failed to build crawler runtime");
-        rt.block_on(crate::crawlers::run_crawl(&pool_clone, crawl_id));
+        rt.block_on(async move {
+            let _permit = sem.acquire_owned().await.expect("crawl semaphore closed");
+            crate::crawlers::run_crawl(&pool_clone, crawl_id).await;
+        });
     });
 }
 
