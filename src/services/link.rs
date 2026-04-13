@@ -38,8 +38,16 @@ pub async fn create(pool: &PgPool, user_id: i32, credential_id: i32) -> Result<L
     Ok(lnk)
 }
 
-pub async fn list(pool: &PgPool, user_id: i32) -> Result<Vec<Link>, LinkError> {
-    link::list_by_user(pool, user_id)
+pub async fn list(
+    pool: &PgPool,
+    user_id: i32,
+    page: i64,
+    per_page: i64,
+) -> Result<(Vec<Link>, i64), LinkError> {
+    let per_page = per_page.clamp(1, 100);
+    let page = page.max(1);
+    let offset = (page - 1) * per_page;
+    link::list_by_user(pool, user_id, per_page, offset)
         .await
         .map_err(|_| LinkError::Internal)
 }

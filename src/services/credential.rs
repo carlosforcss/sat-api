@@ -98,8 +98,16 @@ pub async fn delete(pool: &PgPool, id: i32, user_id: i32) -> Result<bool, Creden
         .map_err(|_| CredentialError::Internal)
 }
 
-pub async fn list(pool: &PgPool, user_id: i32) -> Result<Vec<Credential>, CredentialError> {
-    credential::list_by_user(pool, user_id)
+pub async fn list(
+    pool: &PgPool,
+    user_id: i32,
+    page: i64,
+    per_page: i64,
+) -> Result<(Vec<Credential>, i64), CredentialError> {
+    let per_page = per_page.clamp(1, 100);
+    let page = page.max(1);
+    let offset = (page - 1) * per_page;
+    credential::list_by_user(pool, user_id, per_page, offset)
         .await
         .map_err(|_| CredentialError::Internal)
 }

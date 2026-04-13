@@ -75,8 +75,26 @@ pub async fn list_for_user(
     link_id_filter: Option<i32>,
     crawl_type_filter: Option<&str>,
     status_filter: Option<&str>,
-) -> Result<Vec<Crawl>, sqlx::Error> {
-    sqlx::query_as::<_, Crawl>(
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<Crawl>, i64), sqlx::Error> {
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM crawls
+         JOIN links ON links.id = crawls.link_id
+         WHERE links.user_id = $1
+           AND ($2::INT IS NULL OR crawls.link_id = $2)
+           AND ($3::TEXT IS NULL OR crawls.crawl_type::TEXT = $3)
+           AND ($4::TEXT IS NULL OR crawls.status::TEXT = $4)",
+    )
+    .bind(user_id)
+    .bind(link_id_filter)
+    .bind(crawl_type_filter)
+    .bind(status_filter)
+    .fetch_one(pool)
+    .await?;
+
+    let rows = sqlx::query_as::<_, Crawl>(
         "SELECT crawls.id, crawls.link_id, crawls.crawl_type::TEXT, crawls.status::TEXT,
                 crawls.params, crawls.response_message, crawls.started_at, crawls.finished_at,
                 crawls.created_at, crawls.updated_at
@@ -86,14 +104,19 @@ pub async fn list_for_user(
            AND ($2::INT IS NULL OR crawls.link_id = $2)
            AND ($3::TEXT IS NULL OR crawls.crawl_type::TEXT = $3)
            AND ($4::TEXT IS NULL OR crawls.status::TEXT = $4)
-         ORDER BY crawls.created_at DESC",
+         ORDER BY crawls.created_at DESC
+         LIMIT $5 OFFSET $6",
     )
     .bind(user_id)
     .bind(link_id_filter)
     .bind(crawl_type_filter)
     .bind(status_filter)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(pool)
-    .await
+    .await?;
+
+    Ok((rows, total))
 }
 
 pub async fn find_by_id_for_user(

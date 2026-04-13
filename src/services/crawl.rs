@@ -66,13 +66,20 @@ pub async fn list(
     pool: &PgPool,
     user_id: i32,
     filters: CrawlFilters,
-) -> Result<Vec<Crawl>, CrawlError> {
+    page: i64,
+    per_page: i64,
+) -> Result<(Vec<Crawl>, i64), CrawlError> {
+    let per_page = per_page.clamp(1, 100);
+    let page = page.max(1);
+    let offset = (page - 1) * per_page;
     crawl::list_for_user(
         pool,
         user_id,
         filters.link_id,
         filters.crawl_type.as_deref(),
         filters.status.as_deref(),
+        per_page,
+        offset,
     )
     .await
     .map_err(|_| CrawlError::Internal)

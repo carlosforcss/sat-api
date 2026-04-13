@@ -48,11 +48,30 @@ pub struct CreateCrawlRequest {
     pub params: Option<serde_json::Value>,
 }
 
+#[derive(Serialize, ToSchema)]
+pub struct CrawlPage {
+    pub data: Vec<CrawlResponse>,
+    pub total: i64,
+    pub page: i64,
+    pub per_page: i64,
+}
+
 #[derive(Deserialize, IntoParams)]
 pub struct CrawlQueryParams {
     pub link_id: Option<i32>,
     pub crawl_type: Option<String>,
     pub status: Option<String>,
+    #[serde(default = "default_page")]
+    pub page: i64,
+    #[serde(default = "default_per_page")]
+    pub per_page: i64,
+}
+
+fn default_page() -> i64 {
+    1
+}
+fn default_per_page() -> i64 {
+    20
 }
 
 #[utoipa::path(
@@ -60,7 +79,7 @@ pub struct CrawlQueryParams {
     path = "/api/crawls",
     params(CrawlQueryParams),
     responses(
-        (status = 200, description = "List of crawls", body = Vec<CrawlResponse>),
+        (status = 200, description = "Paginated list of crawls", body = CrawlPage),
         (status = 401, description = "Unauthorized"),
     ),
     security(("bearer_auth" = [])),
@@ -77,13 +96,13 @@ pub async fn list_crawls(
         status: params.status,
     };
 
-    match crawl_service::list(&state.db, auth.user_id, filters).await {
-        Ok(crawls) => Json(
-            crawls
-                .into_iter()
-                .map(CrawlResponse::from)
-                .collect::<Vec<_>>(),
-        )
+    match crawl_service::list(&state.db, auth.user_id, filters, params.page, params.per_page).await {
+        Ok((crawls, total)) => Json(CrawlPage {
+            data: crawls.into_iter().map(CrawlResponse::from).collect(),
+            total,
+            page: params.page,
+            per_page: params.per_page,
+        })
         .into_response(),
         Err(e) => e.into_response(),
     }

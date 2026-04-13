@@ -1,12 +1,12 @@
 use axum::{
-    extract::{Multipart, Path, State},
+    extract::{Multipart, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 
 use crate::{extractors::AuthUser, services::credential as credential_service, AppState};
 
@@ -23,6 +23,29 @@ pub struct CredentialResponse {
     pub cred_type: String,
     pub status: String,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct CredentialPage {
+    pub data: Vec<CredentialResponse>,
+    pub total: i64,
+    pub page: i64,
+    pub per_page: i64,
+}
+
+#[derive(Deserialize, IntoParams)]
+pub struct CredentialQueryParams {
+    #[serde(default = "default_page")]
+    pub page: i64,
+    #[serde(default = "default_per_page")]
+    pub per_page: i64,
+}
+
+fn default_page() -> i64 {
+    1
+}
+fn default_per_page() -> i64 {
+    20
 }
 
 #[utoipa::path(
@@ -137,17 +160,22 @@ pub async fn create_fiel(
 #[utoipa::path(
     get,
     path = "/api/credentials",
+    params(CredentialQueryParams),
     responses(
-        (status = 200, description = "List of credentials", body = Vec<CredentialResponse>),
+        (status = 200, description = "Paginated list of credentials", body = CredentialPage),
         (status = 401, description = "Unauthorized"),
     ),
     security(("bearer_auth" = [])),
     tag = "Credentials"
 )]
-pub async fn list_credentials(State(state): State<AppState>, auth: AuthUser) -> Response {
-    match credential_service::list(&state.db, auth.user_id).await {
-        Ok(creds) => Json(
-            creds
+pub async fn list_credentials(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<CredentialQueryParams>,
+) -> Response {
+    match credential_service::list(&state.db, auth.user_id, params.page, params.per_page).await {
+        Ok((creds, total)) => Json(CredentialPage {
+            data: creds
                 .into_iter()
                 .map(|c| CredentialResponse {
                     id: c.id,
@@ -156,8 +184,11 @@ pub async fn list_credentials(State(state): State<AppState>, auth: AuthUser) -> 
                     status: c.status,
                     created_at: c.created_at,
                 })
-                .collect::<Vec<_>>(),
-        )
+                .collect(),
+            total,
+            page: params.page,
+            per_page: params.per_page,
+        })
         .into_response(),
         Err(e) => e.into_response(),
     }

@@ -20,6 +20,25 @@ pub struct InvoiceQueryParams {
     pub receiver_taxpayer_id: Option<String>,
     pub invoice_type: Option<String>,
     pub invoice_status: Option<String>,
+    #[serde(default = "default_page")]
+    pub page: i64,
+    #[serde(default = "default_per_page")]
+    pub per_page: i64,
+}
+
+fn default_page() -> i64 {
+    1
+}
+fn default_per_page() -> i64 {
+    20
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct InvoicePage {
+    pub data: Vec<InvoiceResponse>,
+    pub total: i64,
+    pub page: i64,
+    pub per_page: i64,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -46,7 +65,7 @@ pub struct InvoiceResponse {
     path = "/api/invoices",
     params(InvoiceQueryParams),
     responses(
-        (status = 200, description = "List of invoices", body = Vec<InvoiceResponse>),
+        (status = 200, description = "Paginated list of invoices", body = InvoicePage),
         (status = 401, description = "Unauthorized"),
     ),
     security(("bearer_auth" = [])),
@@ -64,9 +83,9 @@ pub async fn list_invoices(
         invoice_status: params.invoice_status,
     };
 
-    match invoice_service::list(&state.db, auth.user_id, filters).await {
-        Ok(invoices) => Json(
-            invoices
+    match invoice_service::list(&state.db, auth.user_id, filters, params.page, params.per_page).await {
+        Ok((invoices, total)) => Json(InvoicePage {
+            data: invoices
                 .into_iter()
                 .map(|inv| InvoiceResponse {
                     id: inv.id,
@@ -85,8 +104,11 @@ pub async fn list_invoices(
                     download_path: inv.download_path,
                     created_at: inv.created_at,
                 })
-                .collect::<Vec<_>>(),
-        )
+                .collect(),
+            total,
+            page: params.page,
+            per_page: params.per_page,
+        })
         .into_response(),
         Err(e) => e.into_response(),
     }

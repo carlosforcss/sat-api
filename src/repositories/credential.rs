@@ -69,13 +69,28 @@ pub async fn delete(pool: &PgPool, id: i32, user_id: i32) -> Result<bool, sqlx::
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn list_by_user(pool: &PgPool, user_id: i32) -> Result<Vec<Credential>, sqlx::Error> {
-    sqlx::query_as::<_, Credential>(&format!(
-        "{SELECT} WHERE user_id = $1 ORDER BY created_at DESC"
+pub async fn list_by_user(
+    pool: &PgPool,
+    user_id: i32,
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<Credential>, i64), sqlx::Error> {
+    let total: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM credentials WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await?;
+
+    let rows = sqlx::query_as::<_, Credential>(&format!(
+        "{SELECT} WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
     ))
     .bind(user_id)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(pool)
-    .await
+    .await?;
+
+    Ok((rows, total))
 }
 
 pub async fn update_status(pool: &PgPool, id: i32, status: &str) -> Result<(), sqlx::Error> {

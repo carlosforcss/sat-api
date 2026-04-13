@@ -73,8 +73,28 @@ pub async fn list_for_user(
     pool: &PgPool,
     user_id: i32,
     filters: InvoiceFilters,
-) -> Result<Vec<Invoice>, sqlx::Error> {
-    sqlx::query_as::<_, Invoice>(
+    limit: i64,
+    offset: i64,
+) -> Result<(Vec<Invoice>, i64), sqlx::Error> {
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)
+         FROM invoices
+         JOIN links ON links.id = invoices.link_id
+         WHERE links.user_id = $1
+           AND ($2::TEXT IS NULL OR invoices.issuer_taxpayer_id = $2)
+           AND ($3::TEXT IS NULL OR invoices.receiver_taxpayer_id = $3)
+           AND ($4::TEXT IS NULL OR invoices.invoice_type = $4)
+           AND ($5::TEXT IS NULL OR invoices.invoice_status = $5)",
+    )
+    .bind(user_id)
+    .bind(&filters.issuer_taxpayer_id)
+    .bind(&filters.receiver_taxpayer_id)
+    .bind(&filters.invoice_type)
+    .bind(&filters.invoice_status)
+    .fetch_one(pool)
+    .await?;
+
+    let rows = sqlx::query_as::<_, Invoice>(
         "SELECT invoices.id, invoices.link_id, invoices.uuid, invoices.fiscal_id,
                 invoices.issuer_taxpayer_id, invoices.issuer_name,
                 invoices.receiver_taxpayer_id, invoices.receiver_name,
@@ -88,13 +108,18 @@ pub async fn list_for_user(
            AND ($3::TEXT IS NULL OR invoices.receiver_taxpayer_id = $3)
            AND ($4::TEXT IS NULL OR invoices.invoice_type = $4)
            AND ($5::TEXT IS NULL OR invoices.invoice_status = $5)
-         ORDER BY invoices.created_at DESC",
+         ORDER BY invoices.created_at DESC
+         LIMIT $6 OFFSET $7",
     )
     .bind(user_id)
     .bind(filters.issuer_taxpayer_id)
     .bind(filters.receiver_taxpayer_id)
     .bind(filters.invoice_type)
     .bind(filters.invoice_status)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(pool)
-    .await
+    .await?;
+
+    Ok((rows, total))
 }

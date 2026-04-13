@@ -1,12 +1,12 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 
 use crate::{extractors::AuthUser, services::link as link_service, AppState};
 
@@ -22,6 +22,29 @@ pub struct LinkResponse {
     pub taxpayer_id: String,
     pub status: String,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct LinkPage {
+    pub data: Vec<LinkResponse>,
+    pub total: i64,
+    pub page: i64,
+    pub per_page: i64,
+}
+
+#[derive(Deserialize, IntoParams)]
+pub struct LinkQueryParams {
+    #[serde(default = "default_page")]
+    pub page: i64,
+    #[serde(default = "default_per_page")]
+    pub per_page: i64,
+}
+
+fn default_page() -> i64 {
+    1
+}
+fn default_per_page() -> i64 {
+    20
 }
 
 #[utoipa::path(
@@ -60,17 +83,22 @@ pub async fn create_link(
 #[utoipa::path(
     get,
     path = "/api/links",
+    params(LinkQueryParams),
     responses(
-        (status = 200, description = "List of links", body = Vec<LinkResponse>),
+        (status = 200, description = "Paginated list of links", body = LinkPage),
         (status = 401, description = "Unauthorized"),
     ),
     security(("bearer_auth" = [])),
     tag = "Links"
 )]
-pub async fn list_links(State(state): State<AppState>, auth: AuthUser) -> Response {
-    match link_service::list(&state.db, auth.user_id).await {
-        Ok(links) => Json(
-            links
+pub async fn list_links(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<LinkQueryParams>,
+) -> Response {
+    match link_service::list(&state.db, auth.user_id, params.page, params.per_page).await {
+        Ok((links, total)) => Json(LinkPage {
+            data: links
                 .into_iter()
                 .map(|lnk| LinkResponse {
                     id: lnk.id,
@@ -79,8 +107,11 @@ pub async fn list_links(State(state): State<AppState>, auth: AuthUser) -> Respon
                     status: lnk.status,
                     created_at: lnk.created_at,
                 })
-                .collect::<Vec<_>>(),
-        )
+                .collect(),
+            total,
+            page: params.page,
+            per_page: params.per_page,
+        })
         .into_response(),
         Err(e) => e.into_response(),
     }
