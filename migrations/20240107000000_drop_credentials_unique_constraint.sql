@@ -1,1 +1,0 @@
-ALTER TABLE credentials DROP CONSTRAINT credentials_user_id_rfc_cred_type_key;
