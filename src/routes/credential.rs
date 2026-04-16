@@ -86,10 +86,21 @@ pub async fn create_ciec(
     }
 }
 
+#[derive(ToSchema)]
+#[allow(dead_code)]
+pub struct CreateFielRequest {
+    pub taxpayer_id: String,
+    pub password: String,
+    #[schema(value_type = String, format = Binary)]
+    pub cer_file: Vec<u8>,
+    #[schema(value_type = String, format = Binary)]
+    pub key_file: Vec<u8>,
+}
+
 #[utoipa::path(
     post,
     path = "/api/credentials/fiel",
-    request_body(content_type = "multipart/form-data", description = "Fields: taxpayer_id (text), password (text), cer_file (binary), key_file (binary)"),
+    request_body(content = inline(CreateFielRequest), content_type = "multipart/form-data"),
     responses(
         (status = 201, description = "FIEL credential created", body = CredentialResponse),
         (status = 401, description = "Unauthorized"),
