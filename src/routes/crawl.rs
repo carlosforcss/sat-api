@@ -61,17 +61,10 @@ pub struct CrawlQueryParams {
     pub link_id: Option<i32>,
     pub crawl_type: Option<String>,
     pub status: Option<String>,
-    #[serde(default = "default_page")]
+    #[serde(default = "crate::routes::default_page")]
     pub page: i64,
-    #[serde(default = "default_per_page")]
+    #[serde(default = "crate::routes::default_per_page")]
     pub per_page: i64,
-}
-
-fn default_page() -> i64 {
-    1
-}
-fn default_per_page() -> i64 {
-    20
 }
 
 #[utoipa::path(
@@ -159,6 +152,7 @@ pub async fn create_crawl(
     let params = body.params.unwrap_or(serde_json::json!({}));
     match crawl_service::create(
         &state.db,
+        state.storage.clone(),
         auth.user_id,
         body.link_id,
         &body.crawl_type,

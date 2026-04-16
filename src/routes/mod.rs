@@ -5,6 +5,14 @@ pub mod health;
 pub mod invoice;
 pub mod link;
 
+pub fn default_page() -> i64 {
+    1
+}
+
+pub fn default_per_page() -> i64 {
+    20
+}
+
 use axum::{
     routing::{get, post},
     Router,

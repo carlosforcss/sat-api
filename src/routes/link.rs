@@ -8,7 +8,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-use crate::{extractors::AuthUser, services::link as link_service, AppState};
+use crate::{
+    extractors::AuthUser, repositories::link::Link, services::link as link_service, AppState,
+};
 
 #[derive(Serialize, ToSchema)]
 pub struct LinkResponse {
@@ -27,19 +29,24 @@ pub struct LinkPage {
     pub per_page: i64,
 }
 
-#[derive(Deserialize, IntoParams)]
-pub struct LinkQueryParams {
-    #[serde(default = "default_page")]
-    pub page: i64,
-    #[serde(default = "default_per_page")]
-    pub per_page: i64,
+impl From<Link> for LinkResponse {
+    fn from(lnk: Link) -> Self {
+        LinkResponse {
+            id: lnk.id,
+            credential_id: lnk.credential_id,
+            taxpayer_id: lnk.taxpayer_id,
+            status: lnk.status,
+            created_at: lnk.created_at,
+        }
+    }
 }
 
-fn default_page() -> i64 {
-    1
-}
-fn default_per_page() -> i64 {
-    20
+#[derive(Deserialize, IntoParams)]
+pub struct LinkQueryParams {
+    #[serde(default = "crate::routes::default_page")]
+    pub page: i64,
+    #[serde(default = "crate::routes::default_per_page")]
+    pub per_page: i64,
 }
 
 #[utoipa::path(
@@ -60,16 +67,7 @@ pub async fn list_links(
 ) -> Response {
     match link_service::list(&state.db, auth.user_id, params.page, params.per_page).await {
         Ok((links, total)) => Json(LinkPage {
-            data: links
-                .into_iter()
-                .map(|lnk| LinkResponse {
-                    id: lnk.id,
-                    credential_id: lnk.credential_id,
-                    taxpayer_id: lnk.taxpayer_id,
-                    status: lnk.status,
-                    created_at: lnk.created_at,
-                })
-                .collect(),
+            data: links.into_iter().map(LinkResponse::from).collect(),
             total,
             page: params.page,
             per_page: params.per_page,

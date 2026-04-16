@@ -15,8 +15,6 @@ pub struct Crawl {
     pub updated_at: DateTime<Utc>,
 }
 
-const SELECT: &str = "SELECT id, link_id, crawl_type::TEXT, status::TEXT, params, response_message, started_at, finished_at, created_at, updated_at FROM crawls";
-
 pub async fn create(
     pool: &PgPool,
     link_id: i32,
@@ -36,10 +34,12 @@ pub async fn create(
 }
 
 pub async fn find_by_id(pool: &PgPool, id: i32) -> Result<Option<Crawl>, sqlx::Error> {
-    sqlx::query_as::<_, Crawl>(&format!("{SELECT} WHERE id = $1"))
-        .bind(id)
-        .fetch_optional(pool)
-        .await
+    sqlx::query_as::<_, Crawl>(
+        "SELECT id, link_id, crawl_type::TEXT, status::TEXT, params, response_message, started_at, finished_at, created_at, updated_at FROM crawls WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
 }
 
 pub async fn set_running(pool: &PgPool, id: i32) -> Result<(), sqlx::Error> {

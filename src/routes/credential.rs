@@ -8,7 +8,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
-use crate::{extractors::AuthUser, services::credential as credential_service, AppState};
+use crate::{
+    extractors::AuthUser, repositories::credential::Credential,
+    services::credential as credential_service, AppState,
+};
 
 #[derive(Deserialize, ToSchema)]
 pub struct CreateCiecRequest {
@@ -33,19 +36,24 @@ pub struct CredentialPage {
     pub per_page: i64,
 }
 
-#[derive(Deserialize, IntoParams)]
-pub struct CredentialQueryParams {
-    #[serde(default = "default_page")]
-    pub page: i64,
-    #[serde(default = "default_per_page")]
-    pub per_page: i64,
+impl From<Credential> for CredentialResponse {
+    fn from(c: Credential) -> Self {
+        CredentialResponse {
+            id: c.id,
+            taxpayer_id: c.taxpayer_id,
+            cred_type: c.cred_type,
+            status: c.status,
+            created_at: c.created_at,
+        }
+    }
 }
 
-fn default_page() -> i64 {
-    1
-}
-fn default_per_page() -> i64 {
-    20
+#[derive(Deserialize, IntoParams)]
+pub struct CredentialQueryParams {
+    #[serde(default = "crate::routes::default_page")]
+    pub page: i64,
+    #[serde(default = "crate::routes::default_per_page")]
+    pub per_page: i64,
 }
 
 #[utoipa::path(
@@ -66,23 +74,14 @@ pub async fn create_ciec(
 ) -> Response {
     match credential_service::create_ciec(
         &state.db,
+        state.storage.clone(),
         auth.user_id,
         &body.taxpayer_id,
         &body.password,
     )
     .await
     {
-        Ok(cred) => (
-            StatusCode::CREATED,
-            Json(CredentialResponse {
-                id: cred.id,
-                taxpayer_id: cred.taxpayer_id,
-                cred_type: cred.cred_type,
-                status: cred.status,
-                created_at: cred.created_at,
-            }),
-        )
-            .into_response(),
+        Ok(cred) => (StatusCode::CREATED, Json(CredentialResponse::from(cred))).into_response(),
         Err(e) => e.into_response(),
     }
 }
@@ -139,6 +138,7 @@ pub async fn create_fiel(
 
     match credential_service::create_fiel(
         &state.db,
+        state.storage.clone(),
         &state.upload_path,
         auth.user_id,
         &taxpayer_id,
@@ -148,17 +148,7 @@ pub async fn create_fiel(
     )
     .await
     {
-        Ok(cred) => (
-            StatusCode::CREATED,
-            Json(CredentialResponse {
-                id: cred.id,
-                taxpayer_id: cred.taxpayer_id,
-                cred_type: cred.cred_type,
-                status: cred.status,
-                created_at: cred.created_at,
-            }),
-        )
-            .into_response(),
+        Ok(cred) => (StatusCode::CREATED, Json(CredentialResponse::from(cred))).into_response(),
         Err(e) => e.into_response(),
     }
 }
@@ -181,16 +171,7 @@ pub async fn list_credentials(
 ) -> Response {
     match credential_service::list(&state.db, auth.user_id, params.page, params.per_page).await {
         Ok((creds, total)) => Json(CredentialPage {
-            data: creds
-                .into_iter()
-                .map(|c| CredentialResponse {
-                    id: c.id,
-                    taxpayer_id: c.taxpayer_id,
-                    cred_type: c.cred_type,
-                    status: c.status,
-                    created_at: c.created_at,
-                })
-                .collect(),
+            data: creds.into_iter().map(CredentialResponse::from).collect(),
             total,
             page: params.page,
             per_page: params.per_page,

@@ -7,6 +7,7 @@ use tokio::sync::Semaphore;
 
 use crate::repositories::crawl::Crawl;
 use crate::repositories::{crawl, link};
+use crate::storage::S3Storage;
 
 const MAX_CONCURRENT_CRAWLS: usize = 3;
 static CRAWL_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
@@ -40,6 +41,7 @@ pub struct CrawlFilters {
 
 pub async fn create(
     pool: &PgPool,
+    storage: Arc<S3Storage>,
     user_id: i32,
     link_id: i32,
     crawl_type: &str,
@@ -57,12 +59,12 @@ pub async fn create(
             CrawlError::Internal
         })?;
 
-    spawn(pool, crawl.id);
+    spawn(pool, crawl.id, storage);
 
     Ok(crawl)
 }
 
-pub fn spawn(pool: &PgPool, crawl_id: i32) {
+pub fn spawn(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) {
     let pool_clone = pool.clone();
     let sem = crawl_semaphore();
     std::thread::spawn(move || {
@@ -73,7 +75,7 @@ pub fn spawn(pool: &PgPool, crawl_id: i32) {
             .expect("failed to build crawler runtime");
         rt.block_on(async move {
             let _permit = sem.acquire_owned().await.expect("crawl semaphore closed");
-            crate::crawlers::run_crawl(&pool_clone, crawl_id).await;
+            crate::crawlers::run_crawl(&pool_clone, crawl_id, storage).await;
         });
     });
 }
@@ -85,9 +87,7 @@ pub async fn list(
     page: i64,
     per_page: i64,
 ) -> Result<(Vec<Crawl>, i64), CrawlError> {
-    let per_page = per_page.clamp(1, 100);
-    let page = page.max(1);
-    let offset = (page - 1) * per_page;
+    let (_, per_page, offset) = crate::services::paginate(page, per_page);
     crawl::list_for_user(
         pool,
         user_id,

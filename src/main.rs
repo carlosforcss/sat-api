@@ -11,12 +11,14 @@ mod extractors;
 mod repositories;
 mod routes;
 mod services;
+mod storage;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: sqlx::PgPool,
     pub jwt_secret: String,
     pub upload_path: String,
+    pub storage: std::sync::Arc<crate::storage::S3Storage>,
 }
 
 struct BearerAuth;
@@ -141,10 +143,13 @@ async fn main() {
         .await
         .expect("Failed to run migrations");
 
+    let storage = std::sync::Arc::new(crate::storage::S3Storage::from_env().await);
+
     let state = AppState {
         db: pool,
         jwt_secret,
         upload_path,
+        storage,
     };
 
     let app = Router::new()

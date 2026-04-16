@@ -17,6 +17,8 @@ pub struct Invoice {
     pub invoice_type: String,
     pub invoice_status: String,
     pub download_path: String,
+    pub xml_file_id: Option<i32>,
+    pub pdf_file_id: Option<i32>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -25,6 +27,8 @@ pub struct InvoiceFilters {
     pub receiver_taxpayer_id: Option<String>,
     pub invoice_type: Option<String>,
     pub invoice_status: Option<String>,
+    pub has_xml: Option<bool>,
+    pub has_pdf: Option<bool>,
 }
 
 pub async fn create(
@@ -62,7 +66,8 @@ pub async fn create(
              download_path        = EXCLUDED.download_path
          RETURNING id, link_id, uuid, fiscal_id, issuer_taxpayer_id, issuer_name,
                    receiver_taxpayer_id, receiver_name, issued_at, certified_at, total,
-                   invoice_type, invoice_status, download_path, created_at",
+                   invoice_type, invoice_status, download_path, xml_file_id, pdf_file_id,
+                   created_at",
     )
     .bind(link_id)
     .bind(uuid)
@@ -92,7 +97,8 @@ pub async fn find_by_id_for_user(
                 invoices.receiver_taxpayer_id, invoices.receiver_name,
                 invoices.issued_at, invoices.certified_at, invoices.total,
                 invoices.invoice_type, invoices.invoice_status,
-                invoices.download_path, invoices.created_at
+                invoices.download_path, invoices.xml_file_id, invoices.pdf_file_id,
+                invoices.created_at
          FROM invoices
          JOIN links ON links.id = invoices.link_id
          WHERE invoices.id = $1 AND links.user_id = $2",
@@ -118,13 +124,17 @@ pub async fn list_for_user(
            AND ($2::TEXT IS NULL OR invoices.issuer_taxpayer_id = $2)
            AND ($3::TEXT IS NULL OR invoices.receiver_taxpayer_id = $3)
            AND ($4::TEXT IS NULL OR invoices.invoice_type = $4)
-           AND ($5::TEXT IS NULL OR invoices.invoice_status = $5)",
+           AND ($5::TEXT IS NULL OR invoices.invoice_status = $5)
+           AND ($6::BOOL IS NULL OR ($6 = TRUE AND invoices.xml_file_id IS NOT NULL) OR ($6 = FALSE AND invoices.xml_file_id IS NULL))
+           AND ($7::BOOL IS NULL OR ($7 = TRUE AND invoices.pdf_file_id IS NOT NULL) OR ($7 = FALSE AND invoices.pdf_file_id IS NULL))",
     )
     .bind(user_id)
     .bind(&filters.issuer_taxpayer_id)
     .bind(&filters.receiver_taxpayer_id)
     .bind(&filters.invoice_type)
     .bind(&filters.invoice_status)
+    .bind(filters.has_xml)
+    .bind(filters.has_pdf)
     .fetch_one(pool)
     .await?;
 
@@ -134,7 +144,8 @@ pub async fn list_for_user(
                 invoices.receiver_taxpayer_id, invoices.receiver_name,
                 invoices.issued_at, invoices.certified_at, invoices.total,
                 invoices.invoice_type, invoices.invoice_status,
-                invoices.download_path, invoices.created_at
+                invoices.download_path, invoices.xml_file_id, invoices.pdf_file_id,
+                invoices.created_at
          FROM invoices
          JOIN links ON links.id = invoices.link_id
          WHERE links.user_id = $1
@@ -142,18 +153,41 @@ pub async fn list_for_user(
            AND ($3::TEXT IS NULL OR invoices.receiver_taxpayer_id = $3)
            AND ($4::TEXT IS NULL OR invoices.invoice_type = $4)
            AND ($5::TEXT IS NULL OR invoices.invoice_status = $5)
+           AND ($6::BOOL IS NULL OR ($6 = TRUE AND invoices.xml_file_id IS NOT NULL) OR ($6 = FALSE AND invoices.xml_file_id IS NULL))
+           AND ($7::BOOL IS NULL OR ($7 = TRUE AND invoices.pdf_file_id IS NOT NULL) OR ($7 = FALSE AND invoices.pdf_file_id IS NULL))
          ORDER BY invoices.issued_at DESC
-         LIMIT $6 OFFSET $7",
+         LIMIT $8 OFFSET $9",
     )
     .bind(user_id)
     .bind(filters.issuer_taxpayer_id)
     .bind(filters.receiver_taxpayer_id)
     .bind(filters.invoice_type)
     .bind(filters.invoice_status)
+    .bind(filters.has_xml)
+    .bind(filters.has_pdf)
     .bind(limit)
     .bind(offset)
     .fetch_all(pool)
     .await?;
 
     Ok((rows, total))
+}
+
+pub async fn set_file_id(
+    pool: &PgPool,
+    id: i32,
+    extension: &str,
+    file_id: i32,
+) -> Result<(), sqlx::Error> {
+    let query = match extension {
+        "xml" => "UPDATE invoices SET xml_file_id = $2 WHERE id = $1",
+        "pdf" => "UPDATE invoices SET pdf_file_id = $2 WHERE id = $1",
+        _ => return Ok(()),
+    };
+    sqlx::query(query)
+        .bind(id)
+        .bind(file_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }

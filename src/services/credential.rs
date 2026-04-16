@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{http::StatusCode, response::IntoResponse, Json};
 use serde_json::json;
 use sqlx::PgPool;
@@ -5,6 +7,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::repositories::credential::Credential;
 use crate::repositories::{crawl as crawl_repo, credential, link as link_repo};
+use crate::storage::S3Storage;
 
 pub enum CredentialError {
     Internal,
@@ -30,6 +33,7 @@ impl IntoResponse for CredentialError {
 
 pub async fn create_ciec(
     pool: &PgPool,
+    storage: Arc<S3Storage>,
     user_id: i32,
     taxpayer_id: &str,
     password: &str,
@@ -46,12 +50,13 @@ pub async fn create_ciec(
             CredentialError::Internal
         })?;
 
-    spawn_validate_crawl(pool, &cred);
+    spawn_validate_crawl(pool, storage, &cred);
     Ok(cred)
 }
 
 pub async fn create_fiel(
     pool: &PgPool,
+    storage: Arc<S3Storage>,
     upload_path: &str,
     user_id: i32,
     taxpayer_id: &str,
@@ -103,12 +108,13 @@ pub async fn create_fiel(
         CredentialError::Internal
     })?;
 
-    spawn_validate_crawl(pool, &cred);
+    spawn_validate_crawl(pool, storage, &cred);
     Ok(cred)
 }
 
-fn spawn_validate_crawl(pool: &PgPool, cred: &Credential) {
+fn spawn_validate_crawl(pool: &PgPool, storage: Arc<S3Storage>, cred: &Credential) {
     let pool = pool.clone();
+    let storage = storage.clone();
     let user_id = cred.user_id;
     let credential_id = cred.id;
     let taxpayer_id = cred.taxpayer_id.clone();
@@ -156,7 +162,7 @@ fn spawn_validate_crawl(pool: &PgPool, cred: &Credential) {
             };
 
         match crawl_repo::create(&pool, link_id, "VALIDATE_CREDENTIALS", crawl_params).await {
-            Ok(crawl) => crate::services::crawl::spawn(&pool, crawl.id),
+            Ok(crawl) => crate::services::crawl::spawn(&pool, crawl.id, storage),
             Err(e) => {
                 tracing::error!("failed to create validation crawl for link {link_id}: {e}")
             }
@@ -166,19 +172,12 @@ fn spawn_validate_crawl(pool: &PgPool, cred: &Credential) {
 
 pub async fn delete(pool: &PgPool, id: i32, user_id: i32) -> Result<bool, CredentialError> {
     credential::delete(pool, id, user_id).await.map_err(|e| {
-        if is_fk_violation(&e) {
+        if crate::repositories::is_fk_violation(&e) {
             CredentialError::InUse
         } else {
             CredentialError::Internal
         }
     })
-}
-
-fn is_fk_violation(e: &sqlx::Error) -> bool {
-    matches!(
-        e,
-        sqlx::Error::Database(db) if db.code().as_deref() == Some("23503")
-    )
 }
 
 pub async fn list(
@@ -187,9 +186,7 @@ pub async fn list(
     page: i64,
     per_page: i64,
 ) -> Result<(Vec<Credential>, i64), CredentialError> {
-    let per_page = per_page.clamp(1, 100);
-    let page = page.max(1);
-    let offset = (page - 1) * per_page;
+    let (_, per_page, offset) = crate::services::paginate(page, per_page);
     credential::list_by_user(pool, user_id, per_page, offset)
         .await
         .map_err(|_| CredentialError::Internal)

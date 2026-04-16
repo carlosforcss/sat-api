@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
@@ -16,19 +18,23 @@ impl std::fmt::Display for CryptoError {
 
 impl std::error::Error for CryptoError {}
 
+static KEY: OnceLock<Result<[u8; 32], String>> = OnceLock::new();
+
 fn get_key() -> Result<[u8; 32], CryptoError> {
-    let hex_key = std::env::var("CREDENTIAL_ENCRYPTION_KEY")
-        .map_err(|_| CryptoError("CREDENTIAL_ENCRYPTION_KEY not set".into()))?;
-    let bytes = hex::decode(&hex_key)
-        .map_err(|_| CryptoError("CREDENTIAL_ENCRYPTION_KEY is not valid hex".into()))?;
-    if bytes.len() != 32 {
-        return Err(CryptoError(
-            "CREDENTIAL_ENCRYPTION_KEY must be 32 bytes (64 hex chars)".into(),
-        ));
-    }
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&bytes);
-    Ok(key)
+    KEY.get_or_init(|| {
+        let hex_key = std::env::var("CREDENTIAL_ENCRYPTION_KEY")
+            .map_err(|_| "CREDENTIAL_ENCRYPTION_KEY not set".to_string())?;
+        let bytes = hex::decode(&hex_key)
+            .map_err(|_| "CREDENTIAL_ENCRYPTION_KEY is not valid hex".to_string())?;
+        if bytes.len() != 32 {
+            return Err("CREDENTIAL_ENCRYPTION_KEY must be 32 bytes (64 hex chars)".to_string());
+        }
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&bytes);
+        Ok(key)
+    })
+    .clone()
+    .map_err(CryptoError)
 }
 
 /// Encrypts `plaintext` with AES-256-GCM.

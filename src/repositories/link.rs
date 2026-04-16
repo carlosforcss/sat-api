@@ -12,9 +12,6 @@ pub struct Link {
     pub updated_at: DateTime<Utc>,
 }
 
-const SELECT: &str =
-    "SELECT id, user_id, credential_id, taxpayer_id, status::TEXT, created_at, updated_at FROM links";
-
 pub async fn create(
     pool: &PgPool,
     user_id: i32,
@@ -38,10 +35,12 @@ pub async fn create(
 }
 
 pub async fn find_by_id(pool: &PgPool, id: i32) -> Result<Option<Link>, sqlx::Error> {
-    sqlx::query_as::<_, Link>(&format!("{SELECT} WHERE id = $1"))
-        .bind(id)
-        .fetch_optional(pool)
-        .await
+    sqlx::query_as::<_, Link>(
+        "SELECT id, user_id, credential_id, taxpayer_id, status::TEXT, created_at, updated_at FROM links WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
 }
 
 pub async fn find_by_id_and_user(
@@ -49,11 +48,13 @@ pub async fn find_by_id_and_user(
     id: i32,
     user_id: i32,
 ) -> Result<Option<Link>, sqlx::Error> {
-    sqlx::query_as::<_, Link>(&format!("{SELECT} WHERE id = $1 AND user_id = $2"))
-        .bind(id)
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await
+    sqlx::query_as::<_, Link>(
+        "SELECT id, user_id, credential_id, taxpayer_id, status::TEXT, created_at, updated_at FROM links WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
 }
 
 pub async fn list_by_user(
@@ -67,9 +68,9 @@ pub async fn list_by_user(
         .fetch_one(pool)
         .await?;
 
-    let rows = sqlx::query_as::<_, Link>(&format!(
-        "{SELECT} WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
-    ))
+    let rows = sqlx::query_as::<_, Link>(
+        "SELECT id, user_id, credential_id, taxpayer_id, status::TEXT, created_at, updated_at FROM links WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+    )
     .bind(user_id)
     .bind(limit)
     .bind(offset)
@@ -93,9 +94,9 @@ pub async fn find_valid_by_user_and_taxpayer_id(
     user_id: i32,
     taxpayer_id: &str,
 ) -> Result<Option<Link>, sqlx::Error> {
-    sqlx::query_as::<_, Link>(&format!(
-        "{SELECT} WHERE user_id = $1 AND taxpayer_id = $2 AND status = 'VALID'::link_status"
-    ))
+    sqlx::query_as::<_, Link>(
+        "SELECT id, user_id, credential_id, taxpayer_id, status::TEXT, created_at, updated_at FROM links WHERE user_id = $1 AND taxpayer_id = $2 AND status = 'VALID'::link_status",
+    )
     .bind(user_id)
     .bind(taxpayer_id)
     .fetch_optional(pool)

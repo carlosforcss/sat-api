@@ -26,6 +26,8 @@ aes-gcm = "0.10"
 hex = "0.4"
 rand = "0.8"
 base64 = "0.22"
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-s3 = "1"
 
 [profile.dev.package.chromiumoxide_cdp]
 debug = 0

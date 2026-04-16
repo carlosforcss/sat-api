@@ -15,8 +15,6 @@ pub struct Credential {
     pub updated_at: DateTime<Utc>,
 }
 
-const SELECT: &str = "SELECT id, user_id, taxpayer_id, cred_type::TEXT, status::TEXT, password, cer_path, key_path, created_at, updated_at FROM credentials";
-
 pub async fn create(
     pool: &PgPool,
     user_id: i32,
@@ -42,10 +40,12 @@ pub async fn create(
 }
 
 pub async fn find_by_id(pool: &PgPool, id: i32) -> Result<Option<Credential>, sqlx::Error> {
-    sqlx::query_as::<_, Credential>(&format!("{SELECT} WHERE id = $1"))
-        .bind(id)
-        .fetch_optional(pool)
-        .await
+    sqlx::query_as::<_, Credential>(
+        "SELECT id, user_id, taxpayer_id, cred_type::TEXT, status::TEXT, password, cer_path, key_path, created_at, updated_at FROM credentials WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
 }
 
 pub async fn find_by_id_and_user(
@@ -53,11 +53,13 @@ pub async fn find_by_id_and_user(
     id: i32,
     user_id: i32,
 ) -> Result<Option<Credential>, sqlx::Error> {
-    sqlx::query_as::<_, Credential>(&format!("{SELECT} WHERE id = $1 AND user_id = $2"))
-        .bind(id)
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await
+    sqlx::query_as::<_, Credential>(
+        "SELECT id, user_id, taxpayer_id, cred_type::TEXT, status::TEXT, password, cer_path, key_path, created_at, updated_at FROM credentials WHERE id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
 }
 
 pub async fn delete(pool: &PgPool, id: i32, user_id: i32) -> Result<bool, sqlx::Error> {
@@ -80,9 +82,9 @@ pub async fn list_by_user(
         .fetch_one(pool)
         .await?;
 
-    let rows = sqlx::query_as::<_, Credential>(&format!(
-        "{SELECT} WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
-    ))
+    let rows = sqlx::query_as::<_, Credential>(
+        "SELECT id, user_id, taxpayer_id, cred_type::TEXT, status::TEXT, password, cer_path, key_path, created_at, updated_at FROM credentials WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+    )
     .bind(user_id)
     .bind(limit)
     .bind(offset)

@@ -33,9 +33,7 @@ pub async fn list(
     page: i64,
     per_page: i64,
 ) -> Result<(Vec<Link>, i64), LinkError> {
-    let per_page = per_page.clamp(1, 100);
-    let page = page.max(1);
-    let offset = (page - 1) * per_page;
+    let (_, per_page, offset) = crate::services::paginate(page, per_page);
     link::list_by_user(pool, user_id, per_page, offset)
         .await
         .map_err(|_| LinkError::Internal)
@@ -43,17 +41,10 @@ pub async fn list(
 
 pub async fn delete(pool: &PgPool, id: i32, user_id: i32) -> Result<bool, LinkError> {
     link::delete(pool, id, user_id).await.map_err(|e| {
-        if is_fk_violation(&e) {
+        if crate::repositories::is_fk_violation(&e) {
             LinkError::InUse
         } else {
             LinkError::Internal
         }
     })
-}
-
-fn is_fk_violation(e: &sqlx::Error) -> bool {
-    matches!(
-        e,
-        sqlx::Error::Database(db) if db.code().as_deref() == Some("23503")
-    )
 }

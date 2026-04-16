@@ -9,11 +9,18 @@ use satcrawler::{
 use sqlx::PgPool;
 
 use crate::repositories::{
-    crawl as crawl_repo, credential as credential_repo, invoice as invoice_repo, link as link_repo,
+    crawl as crawl_repo, credential as credential_repo, files as files_repo,
+    invoice as invoice_repo, link as link_repo,
 };
+use crate::storage::S3Storage;
 
-pub async fn run_crawl(pool: &PgPool, crawl_id: i32) {
-    if let Err(e) = execute(pool, crawl_id).await {
+const FILE_EXTENSIONS: [&str; 2] = ["xml", "pdf"];
+const UPLOAD_INITIAL_DELAY_SECS: u64 = 3;
+const UPLOAD_MAX_RETRIES: u32 = 5;
+const UPLOAD_RETRY_DELAY_SECS: u64 = 2;
+
+pub async fn run_crawl(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) {
+    if let Err(e) = execute(pool, crawl_id, storage).await {
         tracing::error!("crawl {crawl_id} failed: {e}");
         let _ = crawl_repo::set_finished(pool, crawl_id, "FAILED", Some(&e)).await;
     }
@@ -23,48 +30,18 @@ struct DownloadEventHandler {
     pool: PgPool,
     link_id: i32,
     crawl_id: i32,
+    user_id: i32,
+    storage: Arc<S3Storage>,
 }
 
 #[async_trait]
 impl InvoiceEventHandler for DownloadEventHandler {
     async fn on_invoice_event(&self, event: InvoiceEvent) {
-        match event {
+        let (invoice, download_path) = match event {
             InvoiceEvent::Downloaded {
                 invoice,
                 download_path,
-            } => {
-                let result = invoice_repo::create(
-                    &self.pool,
-                    self.link_id,
-                    &invoice.uuid,
-                    &invoice.fiscal_id,
-                    &invoice.issuer_tax_id,
-                    &invoice.issuer_name,
-                    &invoice.receiver_tax_id,
-                    &invoice.receiver_name,
-                    &invoice.issued_at,
-                    &invoice.certified_at,
-                    &invoice.total,
-                    &invoice.invoice_type,
-                    &invoice.invoice_status,
-                    &download_path,
-                )
-                .await;
-
-                match result {
-                    Ok(inv) => tracing::info!(
-                        crawl_id = self.crawl_id,
-                        invoice_id = inv.id,
-                        uuid = %inv.uuid,
-                        "invoice saved"
-                    ),
-                    Err(e) => tracing::error!(
-                        crawl_id = self.crawl_id,
-                        uuid = %invoice.uuid,
-                        "failed to save invoice: {e}"
-                    ),
-                }
-            }
+            } => (invoice, download_path),
             InvoiceEvent::Skipped {
                 invoice,
                 download_path,
@@ -73,14 +50,178 @@ impl InvoiceEventHandler for DownloadEventHandler {
                     crawl_id = self.crawl_id,
                     uuid = %invoice.uuid,
                     path = %download_path,
-                    "invoice skipped (already exists)"
+                    "invoice skipped by crawler (checking S3 status)"
+                );
+                (invoice, download_path)
+            }
+        };
+
+        let db_invoice = match invoice_repo::create(
+            &self.pool,
+            self.link_id,
+            &invoice.uuid,
+            &invoice.fiscal_id,
+            &invoice.issuer_tax_id,
+            &invoice.issuer_name,
+            &invoice.receiver_tax_id,
+            &invoice.receiver_name,
+            &invoice.issued_at,
+            &invoice.certified_at,
+            &invoice.total,
+            &invoice.invoice_type,
+            &invoice.invoice_status,
+            &download_path,
+        )
+        .await
+        {
+            Ok(inv) => inv,
+            Err(e) => {
+                tracing::error!(
+                    crawl_id = self.crawl_id,
+                    uuid = %invoice.uuid,
+                    "failed to save invoice: {e}"
+                );
+                return;
+            }
+        };
+
+        tracing::info!(
+            crawl_id = self.crawl_id,
+            invoice_id = db_invoice.id,
+            uuid = %db_invoice.uuid,
+            "invoice metadata saved"
+        );
+
+        let fiscal_period = fiscal_period_from_issued_at(&invoice.issued_at);
+        let current_period = chrono::Utc::now().format("%Y-%m").to_string();
+
+        // Wait once before reading any files — the browser may still be writing them.
+        tokio::time::sleep(tokio::time::Duration::from_secs(UPLOAD_INITIAL_DELAY_SECS)).await;
+
+        for ext in FILE_EXTENSIONS {
+            let existing_file_id = if ext == "xml" {
+                db_invoice.xml_file_id
+            } else {
+                db_invoice.pdf_file_id
+            };
+
+            if let Some(_) = existing_file_id {
+                // File was previously uploaded. Skip unless it's from the current fiscal period
+                // (current-month invoices can be re-issued/updated by SAT).
+                let should_skip = match &fiscal_period {
+                    Some(fp) => fp != &current_period,
+                    None => false, // unknown period → always re-upload to be safe
+                };
+                if should_skip {
+                    tracing::info!(
+                        crawl_id = self.crawl_id,
+                        uuid = %invoice.uuid,
+                        ext,
+                        "skipping upload — prior fiscal period, file already stored"
+                    );
+                    continue;
+                }
+            }
+
+            let local_path =
+                std::path::Path::new(&download_path).join(format!("{}.{}", invoice.uuid, ext));
+
+            let bytes = match read_with_retry(&local_path, UPLOAD_MAX_RETRIES).await {
+                Some(b) => b,
+                None => {
+                    tracing::error!(
+                        crawl_id = self.crawl_id,
+                        uuid = %invoice.uuid,
+                        ext,
+                        "file not readable after retries — leaving file_id as null"
+                    );
+                    continue;
+                }
+            };
+
+            let s3_key = crate::storage::invoice_s3_key(self.user_id, &invoice.uuid, ext);
+
+            if let Err(e) = self.storage.upload(&s3_key, bytes).await {
+                tracing::error!(
+                    crawl_id = self.crawl_id,
+                    uuid = %invoice.uuid,
+                    ext,
+                    "failed to upload to S3: {e}"
+                );
+                continue;
+            }
+
+            let file = match files_repo::create(&self.pool, self.user_id, &s3_key, ext).await {
+                Ok(f) => f,
+                Err(e) => {
+                    tracing::error!(
+                        crawl_id = self.crawl_id,
+                        uuid = %invoice.uuid,
+                        ext,
+                        "failed to save file record: {e}"
+                    );
+                    continue;
+                }
+            };
+
+            if let Err(e) = invoice_repo::set_file_id(&self.pool, db_invoice.id, ext, file.id).await
+            {
+                tracing::error!(
+                    crawl_id = self.crawl_id,
+                    invoice_id = db_invoice.id,
+                    ext,
+                    "failed to set file_id on invoice: {e}"
+                );
+            } else {
+                tracing::info!(
+                    crawl_id = self.crawl_id,
+                    invoice_id = db_invoice.id,
+                    uuid = %invoice.uuid,
+                    ext,
+                    s3_key,
+                    "invoice file uploaded to S3"
                 );
             }
         }
     }
 }
 
-async fn execute(pool: &PgPool, crawl_id: i32) -> Result<(), String> {
+/// Parses `issued_at` into a "YYYY-MM" fiscal period string.
+/// Tries common SAT date formats. Returns None if unparseable.
+fn fiscal_period_from_issued_at(issued_at: &str) -> Option<String> {
+    // Try ISO 8601 / RFC 3339 (e.g. "2026-01-15T00:00:00")
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(issued_at) {
+        return Some(dt.format("%Y-%m").to_string());
+    }
+    // Try "YYYY-MM-DD" prefix
+    if issued_at.len() >= 7 && issued_at.as_bytes()[4] == b'-' {
+        return Some(issued_at[..7].to_string());
+    }
+    // Try "DD/MM/YYYY"
+    let parts: Vec<&str> = issued_at.splitn(3, '/').collect();
+    if parts.len() == 3 && parts[2].len() >= 4 {
+        return Some(format!("{}-{:0>2}", &parts[2][..4], parts[1]));
+    }
+    None
+}
+
+/// Attempts to read a file, retrying up to `max_retries` times with a fixed delay.
+async fn read_with_retry(path: &std::path::Path, max_retries: u32) -> Option<Vec<u8>> {
+    for attempt in 0..max_retries {
+        match tokio::fs::read(path).await {
+            Ok(bytes) => return Some(bytes),
+            Err(_) => {
+                if attempt + 1 < max_retries {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(UPLOAD_RETRY_DELAY_SECS))
+                        .await;
+                }
+            }
+        }
+    }
+    None
+}
+
+async fn execute(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) -> Result<(), String> {
     let crawl = crawl_repo::find_by_id(pool, crawl_id)
         .await
         .map_err(|e| e.to_string())?
@@ -112,6 +253,8 @@ async fn execute(pool: &PgPool, crawl_id: i32) -> Result<(), String> {
                 pool,
                 crawl.link_id,
                 crawl_id,
+                link.user_id,
+                storage,
             )
             .await?
         }
@@ -123,6 +266,8 @@ async fn execute(pool: &PgPool, crawl_id: i32) -> Result<(), String> {
                 pool,
                 crawl.link_id,
                 crawl_id,
+                link.user_id,
+                storage,
             )
             .await?
         }
@@ -134,6 +279,8 @@ async fn execute(pool: &PgPool, crawl_id: i32) -> Result<(), String> {
                 pool,
                 crawl.link_id,
                 crawl_id,
+                link.user_id,
+                storage,
             )
             .await?
         }
@@ -208,11 +355,19 @@ fn build_config(
     }
 }
 
-fn event_handler(pool: &PgPool, link_id: i32, crawl_id: i32) -> SharedInvoiceEventHandler {
+fn event_handler(
+    pool: &PgPool,
+    link_id: i32,
+    crawl_id: i32,
+    user_id: i32,
+    storage: Arc<S3Storage>,
+) -> SharedInvoiceEventHandler {
     Arc::new(DownloadEventHandler {
         pool: pool.clone(),
         link_id,
         crawl_id,
+        user_id,
+        storage,
     })
 }
 
@@ -233,12 +388,14 @@ async fn download_invoices(
     pool: &PgPool,
     link_id: i32,
     crawl_id: i32,
+    user_id: i32,
+    storage: Arc<S3Storage>,
 ) -> Result<CrawlerResponse, String> {
     let filters = parse_date_filters(params)?;
     let config = build_config(credential, password);
     Ok(Crawler::new(CrawlerType::DownloadInvoices, config)
         .with_filters(Some(filters))
-        .with_event_handler(event_handler(pool, link_id, crawl_id))
+        .with_event_handler(event_handler(pool, link_id, crawl_id, user_id, storage))
         .run()
         .await)
 }
@@ -250,12 +407,14 @@ async fn download_issued_invoices(
     pool: &PgPool,
     link_id: i32,
     crawl_id: i32,
+    user_id: i32,
+    storage: Arc<S3Storage>,
 ) -> Result<CrawlerResponse, String> {
     let filters = parse_date_filters(params)?;
     let config = build_config(credential, password);
     Ok(Crawler::new(CrawlerType::DownloadIssuedInvoices, config)
         .with_filters(Some(filters))
-        .with_event_handler(event_handler(pool, link_id, crawl_id))
+        .with_event_handler(event_handler(pool, link_id, crawl_id, user_id, storage))
         .run()
         .await)
 }
@@ -267,12 +426,14 @@ async fn download_received_invoices(
     pool: &PgPool,
     link_id: i32,
     crawl_id: i32,
+    user_id: i32,
+    storage: Arc<S3Storage>,
 ) -> Result<CrawlerResponse, String> {
     let filters = parse_date_filters(params)?;
     let config = build_config(credential, password);
     Ok(Crawler::new(CrawlerType::DownloadReceivedInvoices, config)
         .with_filters(Some(filters))
-        .with_event_handler(event_handler(pool, link_id, crawl_id))
+        .with_event_handler(event_handler(pool, link_id, crawl_id, user_id, storage))
         .run()
         .await)
 }
