@@ -66,7 +66,6 @@ pub async fn get_invoice_file(
         return Ok((bytes, inv.uuid));
     }
 
-    // Fallback: read from local disk (backward compat for invoices without S3 files yet)
     tracing::warn!(invoice_id, uuid = %inv.uuid, extension, "no S3 file found, falling back to local disk");
     let path = std::path::Path::new(&inv.download_path).join(format!("{}.{}", inv.uuid, extension));
     let bytes = tokio::fs::read(&path).await.map_err(|e| {
@@ -74,7 +73,6 @@ pub async fn get_invoice_file(
         InvoiceError::NotFound
     })?;
 
-    // Opportunistically upload to S3 in the background so the fallback isn't needed next time.
     let s3_key = crate::storage::invoice_s3_key(user_id, &inv.uuid, extension);
     let pool = pool.clone();
     let inv_id = inv.id;

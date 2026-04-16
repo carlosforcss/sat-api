@@ -95,7 +95,6 @@ impl InvoiceEventHandler for DownloadEventHandler {
         let fiscal_period = fiscal_period_from_issued_at(&invoice.issued_at);
         let current_period = chrono::Utc::now().format("%Y-%m").to_string();
 
-        // Wait once before reading any files — the browser may still be writing them.
         tokio::time::sleep(tokio::time::Duration::from_secs(UPLOAD_INITIAL_DELAY_SECS)).await;
 
         for ext in FILE_EXTENSIONS {
@@ -106,11 +105,9 @@ impl InvoiceEventHandler for DownloadEventHandler {
             };
 
             if let Some(_) = existing_file_id {
-                // File was previously uploaded. Skip unless it's from the current fiscal period
-                // (current-month invoices can be re-issued/updated by SAT).
                 let should_skip = match &fiscal_period {
                     Some(fp) => fp != &current_period,
-                    None => false, // unknown period → always re-upload to be safe
+                    None => false,
                 };
                 if should_skip {
                     tracing::info!(
@@ -186,18 +183,13 @@ impl InvoiceEventHandler for DownloadEventHandler {
     }
 }
 
-/// Parses `issued_at` into a "YYYY-MM" fiscal period string.
-/// Tries common SAT date formats. Returns None if unparseable.
 fn fiscal_period_from_issued_at(issued_at: &str) -> Option<String> {
-    // Try ISO 8601 / RFC 3339 (e.g. "2026-01-15T00:00:00")
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(issued_at) {
         return Some(dt.format("%Y-%m").to_string());
     }
-    // Try "YYYY-MM-DD" prefix
     if issued_at.len() >= 7 && issued_at.as_bytes()[4] == b'-' {
         return Some(issued_at[..7].to_string());
     }
-    // Try "DD/MM/YYYY"
     let parts: Vec<&str> = issued_at.splitn(3, '/').collect();
     if parts.len() == 3 && parts[2].len() >= 4 {
         return Some(format!("{}-{:0>2}", &parts[2][..4], parts[1]));
@@ -205,7 +197,6 @@ fn fiscal_period_from_issued_at(issued_at: &str) -> Option<String> {
     None
 }
 
-/// Attempts to read a file, retrying up to `max_retries` times with a fixed delay.
 async fn read_with_retry(path: &std::path::Path, max_retries: u32) -> Option<Vec<u8>> {
     for attempt in 0..max_retries {
         match tokio::fs::read(path).await {
