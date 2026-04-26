@@ -66,45 +66,7 @@ pub async fn get_invoice_file(
         return Ok((bytes, inv.uuid));
     }
 
-    tracing::warn!(invoice_id, uuid = %inv.uuid, extension, "no S3 file found, falling back to local disk");
-    let path = std::path::Path::new(&inv.download_path).join(format!("{}.{}", inv.uuid, extension));
-    let bytes = tokio::fs::read(&path).await.map_err(|e| {
-        tracing::error!("failed to read invoice file {:?}: {e}", path);
-        InvoiceError::NotFound
-    })?;
-
-    let s3_key = crate::storage::invoice_s3_key(user_id, &inv.uuid, extension);
-    let pool = pool.clone();
-    let inv_id = inv.id;
-    let uuid = inv.uuid.clone();
-    let extension = extension.to_string();
-    let bytes_clone = bytes.clone();
-    tokio::spawn(async move {
-        match storage.upload(&s3_key, bytes_clone).await {
-            Ok(()) => match files_repo::create(&pool, user_id, &s3_key, &extension).await {
-                Ok(file) => {
-                    if let Err(e) = invoice::set_file_id(&pool, inv_id, &extension, file.id).await {
-                        tracing::error!(
-                            invoice_id = inv_id,
-                            "failed to set file_id after fallback upload: {e}"
-                        );
-                    } else {
-                        tracing::info!(invoice_id = inv_id, uuid = %uuid, extension, "uploaded fallback file to S3");
-                    }
-                }
-                Err(e) => tracing::error!(
-                    invoice_id = inv_id,
-                    "failed to save file record after fallback upload: {e}"
-                ),
-            },
-            Err(e) => tracing::error!(
-                invoice_id = inv_id,
-                "failed to upload fallback file to S3: {e}"
-            ),
-        }
-    });
-
-    Ok((bytes, inv.uuid))
+    Err(InvoiceError::NotFound)
 }
 
 pub async fn list(

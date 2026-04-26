@@ -4,19 +4,19 @@ use sqlx::{FromRow, PgPool};
 #[derive(FromRow, Clone)]
 pub struct Invoice {
     pub id: i32,
-    pub link_id: i32,
+    pub user_id: i32,
+    pub link_id: Option<i32>,
     pub uuid: String,
     pub fiscal_id: String,
     pub issuer_taxpayer_id: String,
     pub issuer_name: String,
     pub receiver_taxpayer_id: String,
     pub receiver_name: String,
-    pub issued_at: String,
-    pub certified_at: String,
-    pub total: String,
+    pub issued_at: DateTime<Utc>,
+    pub certified_at: DateTime<Utc>,
+    pub total: f64,
     pub invoice_type: String,
     pub invoice_status: String,
-    pub download_path: String,
     pub xml_file_id: Option<i32>,
     pub pdf_file_id: Option<i32>,
     pub created_at: DateTime<Utc>,
@@ -33,26 +33,27 @@ pub struct InvoiceFilters {
 
 pub async fn create(
     pool: &PgPool,
-    link_id: i32,
+    user_id: i32,
+    link_id: Option<i32>,
     uuid: &str,
     fiscal_id: &str,
     issuer_taxpayer_id: &str,
     issuer_name: &str,
     receiver_taxpayer_id: &str,
     receiver_name: &str,
-    issued_at: &str,
-    certified_at: &str,
-    total: &str,
+    issued_at: DateTime<Utc>,
+    certified_at: DateTime<Utc>,
+    total: f64,
     invoice_type: &str,
     invoice_status: &str,
-    download_path: &str,
 ) -> Result<Invoice, sqlx::Error> {
     sqlx::query_as::<_, Invoice>(
-        "INSERT INTO invoices (link_id, uuid, fiscal_id, issuer_taxpayer_id, issuer_name,
+        "INSERT INTO invoices (user_id, link_id, uuid, fiscal_id, issuer_taxpayer_id, issuer_name,
                                receiver_taxpayer_id, receiver_name, issued_at, certified_at,
-                               total, invoice_type, invoice_status, download_path)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-         ON CONFLICT (uuid, link_id) DO UPDATE SET
+                               total, invoice_type, invoice_status)
+         VALUES ($1, $2, $3::UUID, $4, $5, $6, $7, $8, $9, $10, $11, $12::invoice_type_enum, $13::invoice_status_enum)
+         ON CONFLICT (uuid, user_id) DO UPDATE SET
+             link_id              = EXCLUDED.link_id,
              fiscal_id            = EXCLUDED.fiscal_id,
              issuer_taxpayer_id   = EXCLUDED.issuer_taxpayer_id,
              issuer_name          = EXCLUDED.issuer_name,
@@ -62,13 +63,12 @@ pub async fn create(
              certified_at         = EXCLUDED.certified_at,
              total                = EXCLUDED.total,
              invoice_type         = EXCLUDED.invoice_type,
-             invoice_status       = EXCLUDED.invoice_status,
-             download_path        = EXCLUDED.download_path
-         RETURNING id, link_id, uuid, fiscal_id, issuer_taxpayer_id, issuer_name,
-                   receiver_taxpayer_id, receiver_name, issued_at, certified_at, total,
-                   invoice_type, invoice_status, download_path, xml_file_id, pdf_file_id,
-                   created_at",
+             invoice_status       = EXCLUDED.invoice_status
+         RETURNING id, user_id, link_id, uuid::TEXT, fiscal_id, issuer_taxpayer_id, issuer_name,
+                   receiver_taxpayer_id, receiver_name, issued_at, certified_at, total::FLOAT8,
+                   invoice_type::TEXT, invoice_status::TEXT, xml_file_id, pdf_file_id, created_at",
     )
+    .bind(user_id)
     .bind(link_id)
     .bind(uuid)
     .bind(fiscal_id)
@@ -81,8 +81,25 @@ pub async fn create(
     .bind(total)
     .bind(invoice_type)
     .bind(invoice_status)
-    .bind(download_path)
     .fetch_one(pool)
+    .await
+}
+
+pub async fn find_by_uuid_and_user(
+    pool: &PgPool,
+    uuid: &str,
+    user_id: i32,
+) -> Result<Option<Invoice>, sqlx::Error> {
+    sqlx::query_as::<_, Invoice>(
+        "SELECT id, user_id, link_id, uuid::TEXT, fiscal_id, issuer_taxpayer_id, issuer_name,
+                receiver_taxpayer_id, receiver_name, issued_at, certified_at, total::FLOAT8,
+                invoice_type::TEXT, invoice_status::TEXT, xml_file_id, pdf_file_id, created_at
+         FROM invoices
+         WHERE uuid = $1::UUID AND user_id = $2",
+    )
+    .bind(uuid)
+    .bind(user_id)
+    .fetch_optional(pool)
     .await
 }
 
@@ -92,16 +109,11 @@ pub async fn find_by_id_for_user(
     user_id: i32,
 ) -> Result<Option<Invoice>, sqlx::Error> {
     sqlx::query_as::<_, Invoice>(
-        "SELECT invoices.id, invoices.link_id, invoices.uuid, invoices.fiscal_id,
-                invoices.issuer_taxpayer_id, invoices.issuer_name,
-                invoices.receiver_taxpayer_id, invoices.receiver_name,
-                invoices.issued_at, invoices.certified_at, invoices.total,
-                invoices.invoice_type, invoices.invoice_status,
-                invoices.download_path, invoices.xml_file_id, invoices.pdf_file_id,
-                invoices.created_at
+        "SELECT id, user_id, link_id, uuid::TEXT, fiscal_id, issuer_taxpayer_id, issuer_name,
+                receiver_taxpayer_id, receiver_name, issued_at, certified_at, total::FLOAT8,
+                invoice_type::TEXT, invoice_status::TEXT, xml_file_id, pdf_file_id, created_at
          FROM invoices
-         JOIN links ON links.id = invoices.link_id
-         WHERE invoices.id = $1 AND links.user_id = $2",
+         WHERE id = $1 AND user_id = $2",
     )
     .bind(id)
     .bind(user_id)
@@ -119,14 +131,13 @@ pub async fn list_for_user(
     let total: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)
          FROM invoices
-         JOIN links ON links.id = invoices.link_id
-         WHERE links.user_id = $1
-           AND ($2::TEXT IS NULL OR invoices.issuer_taxpayer_id = $2)
-           AND ($3::TEXT IS NULL OR invoices.receiver_taxpayer_id = $3)
-           AND ($4::TEXT IS NULL OR invoices.invoice_type = $4)
-           AND ($5::TEXT IS NULL OR invoices.invoice_status = $5)
-           AND ($6::BOOL IS NULL OR ($6 = TRUE AND invoices.xml_file_id IS NOT NULL) OR ($6 = FALSE AND invoices.xml_file_id IS NULL))
-           AND ($7::BOOL IS NULL OR ($7 = TRUE AND invoices.pdf_file_id IS NOT NULL) OR ($7 = FALSE AND invoices.pdf_file_id IS NULL))",
+         WHERE user_id = $1
+           AND ($2::TEXT IS NULL OR issuer_taxpayer_id = $2)
+           AND ($3::TEXT IS NULL OR receiver_taxpayer_id = $3)
+           AND ($4::TEXT IS NULL OR invoice_type::TEXT = $4)
+           AND ($5::TEXT IS NULL OR invoice_status::TEXT = $5)
+           AND ($6::BOOL IS NULL OR ($6 = TRUE AND xml_file_id IS NOT NULL) OR ($6 = FALSE AND xml_file_id IS NULL))
+           AND ($7::BOOL IS NULL OR ($7 = TRUE AND pdf_file_id IS NOT NULL) OR ($7 = FALSE AND pdf_file_id IS NULL))",
     )
     .bind(user_id)
     .bind(&filters.issuer_taxpayer_id)
@@ -139,23 +150,18 @@ pub async fn list_for_user(
     .await?;
 
     let rows = sqlx::query_as::<_, Invoice>(
-        "SELECT invoices.id, invoices.link_id, invoices.uuid, invoices.fiscal_id,
-                invoices.issuer_taxpayer_id, invoices.issuer_name,
-                invoices.receiver_taxpayer_id, invoices.receiver_name,
-                invoices.issued_at, invoices.certified_at, invoices.total,
-                invoices.invoice_type, invoices.invoice_status,
-                invoices.download_path, invoices.xml_file_id, invoices.pdf_file_id,
-                invoices.created_at
+        "SELECT id, user_id, link_id, uuid::TEXT, fiscal_id, issuer_taxpayer_id, issuer_name,
+                receiver_taxpayer_id, receiver_name, issued_at, certified_at, total::FLOAT8,
+                invoice_type::TEXT, invoice_status::TEXT, xml_file_id, pdf_file_id, created_at
          FROM invoices
-         JOIN links ON links.id = invoices.link_id
-         WHERE links.user_id = $1
-           AND ($2::TEXT IS NULL OR invoices.issuer_taxpayer_id = $2)
-           AND ($3::TEXT IS NULL OR invoices.receiver_taxpayer_id = $3)
-           AND ($4::TEXT IS NULL OR invoices.invoice_type = $4)
-           AND ($5::TEXT IS NULL OR invoices.invoice_status = $5)
-           AND ($6::BOOL IS NULL OR ($6 = TRUE AND invoices.xml_file_id IS NOT NULL) OR ($6 = FALSE AND invoices.xml_file_id IS NULL))
-           AND ($7::BOOL IS NULL OR ($7 = TRUE AND invoices.pdf_file_id IS NOT NULL) OR ($7 = FALSE AND invoices.pdf_file_id IS NULL))
-         ORDER BY invoices.issued_at DESC
+         WHERE user_id = $1
+           AND ($2::TEXT IS NULL OR issuer_taxpayer_id = $2)
+           AND ($3::TEXT IS NULL OR receiver_taxpayer_id = $3)
+           AND ($4::TEXT IS NULL OR invoice_type::TEXT = $4)
+           AND ($5::TEXT IS NULL OR invoice_status::TEXT = $5)
+           AND ($6::BOOL IS NULL OR ($6 = TRUE AND xml_file_id IS NOT NULL) OR ($6 = FALSE AND xml_file_id IS NULL))
+           AND ($7::BOOL IS NULL OR ($7 = TRUE AND pdf_file_id IS NOT NULL) OR ($7 = FALSE AND pdf_file_id IS NULL))
+         ORDER BY issued_at DESC
          LIMIT $8 OFFSET $9",
     )
     .bind(user_id)

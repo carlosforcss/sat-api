@@ -65,6 +65,16 @@ Rules:
 - Repositories only query the DB — no business logic.
 - No aggregator layer. Domain objects are plain Rust structs; keep them in the module they belong to until there is a concrete reason to move them.
 
+**Reactor** — `src/reactor.rs` is the single place for all domain event reactions ("when A happens, do B"). Any time a completed action should trigger a background side effect, add a function here. Current reactions:
+
+- `on_credential_created` — called by services after credential creation; sets up the link and spawns a `VALIDATE_CREDENTIALS` crawl.
+- `on_validation_succeeded` — called by the crawler after successful validation; marks link `VALID` and spawns `DOWNLOAD_ISSUED_INVOICES` + `DOWNLOAD_RECEIVED_INVOICES` crawls.
+- `on_validation_failed` — called by the crawler on failure; restores the previous credential or marks the link `INVALID`.
+
+Each reactor function emits a structured `tracing::info!` log with the prefix `reactor:` so the full event chain is visible with `RUST_LOG=info`.
+
+**Crawl execution** — `services/crawl.rs::spawn` runs each crawl in a dedicated `std::thread` with its own tokio runtime. This isolation is required because the underlying crawler uses headless Chromium (via `chromiumoxide`), which cannot share the axum tokio runtime. A global semaphore (`MAX_CONCURRENT_CRAWLS = 3`) caps concurrent crawl threads.
+
 **OpenAPI / Swagger** — `utoipa` generates the spec from `#[utoipa::path]` macros on each handler. `ApiDoc` in `main.rs` collects all paths. The spec is served at `GET /api/docs/openapi.json` and the Swagger UI at `GET /api/docs`.
 
 **Router assembly** — `swagger_ui` and `openapi_json` handlers are stateless, so they are registered directly on the top-level `Router` before `.with_state(state)` is called. Stateful routes go inside `routes::router()`.

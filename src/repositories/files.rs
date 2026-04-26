@@ -19,6 +19,7 @@ pub async fn create(
     sqlx::query_as::<_, File>(
         "INSERT INTO files (user_id, s3_key, extension)
          VALUES ($1, $2, $3)
+         ON CONFLICT (s3_key) DO UPDATE SET s3_key = EXCLUDED.s3_key
          RETURNING id, user_id, s3_key, extension, created_at",
     )
     .bind(user_id)

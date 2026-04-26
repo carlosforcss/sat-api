@@ -8,6 +8,7 @@ use utoipa::{
 mod crawlers;
 mod crypto;
 mod extractors;
+mod reactor;
 mod repositories;
 mod routes;
 mod services;

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use satcrawler::{
     Crawler, CrawlerConfig, CrawlerFilters, CrawlerOptions, CrawlerResponse, CrawlerType,
     Credentials as SatCredentials, InvoiceEvent, InvoiceEventHandler, LoginType,
@@ -14,10 +15,27 @@ use crate::repositories::{
 };
 use crate::storage::S3Storage;
 
-const FILE_EXTENSIONS: [&str; 2] = ["xml", "pdf"];
-const UPLOAD_INITIAL_DELAY_SECS: u64 = 3;
-const UPLOAD_MAX_RETRIES: u32 = 5;
-const UPLOAD_RETRY_DELAY_SECS: u64 = 2;
+fn parse_sat_datetime(s: &str) -> Option<DateTime<Utc>> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    for fmt in &["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y"] {
+        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, fmt)
+            .map(|ndt| ndt.and_utc())
+            .or_else(|_| {
+                chrono::NaiveDate::parse_from_str(s, fmt)
+                    .map(|nd| nd.and_hms_opt(0, 0, 0).unwrap().and_utc())
+            })
+        {
+            return Some(dt);
+        }
+    }
+    None
+}
+
+fn parse_sat_total(s: &str) -> Option<f64> {
+    s.replace(',', "").trim().parse::<f64>().ok()
+}
 
 pub async fn run_crawl(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) {
     if let Err(e) = execute(pool, crawl_id, storage).await {
@@ -34,43 +52,57 @@ struct DownloadEventHandler {
     storage: Arc<S3Storage>,
 }
 
-#[async_trait]
-impl InvoiceEventHandler for DownloadEventHandler {
-    async fn on_invoice_event(&self, event: InvoiceEvent) {
-        let (invoice, download_path) = match event {
-            InvoiceEvent::Downloaded {
-                invoice,
-                download_path,
-            } => (invoice, download_path),
-            InvoiceEvent::Skipped {
-                invoice,
-                download_path,
-            } => {
-                tracing::info!(
+impl DownloadEventHandler {
+    async fn handle_file(&self, invoice: &satcrawler::Invoice, ext: &str, content: Vec<u8>) {
+        let issued_at = match parse_sat_datetime(&invoice.issued_at) {
+            Some(dt) => dt,
+            None => {
+                tracing::error!(
                     crawl_id = self.crawl_id,
                     uuid = %invoice.uuid,
-                    path = %download_path,
-                    "invoice skipped by crawler (checking S3 status)"
+                    "cannot parse issued_at: {}", invoice.issued_at
                 );
-                (invoice, download_path)
+                return;
+            }
+        };
+        let certified_at = match parse_sat_datetime(&invoice.certified_at) {
+            Some(dt) => dt,
+            None => {
+                tracing::error!(
+                    crawl_id = self.crawl_id,
+                    uuid = %invoice.uuid,
+                    "cannot parse certified_at: {}", invoice.certified_at
+                );
+                return;
+            }
+        };
+        let total = match parse_sat_total(&invoice.total) {
+            Some(v) => v,
+            None => {
+                tracing::error!(
+                    crawl_id = self.crawl_id,
+                    uuid = %invoice.uuid,
+                    "cannot parse total: {}", invoice.total
+                );
+                return;
             }
         };
 
         let db_invoice = match invoice_repo::create(
             &self.pool,
-            self.link_id,
+            self.user_id,
+            Some(self.link_id),
             &invoice.uuid,
             &invoice.fiscal_id,
             &invoice.issuer_tax_id,
             &invoice.issuer_name,
             &invoice.receiver_tax_id,
             &invoice.receiver_name,
-            &invoice.issued_at,
-            &invoice.certified_at,
-            &invoice.total,
+            issued_at,
+            certified_at,
+            total,
             &invoice.invoice_type,
             &invoice.invoice_status,
-            &download_path,
         )
         .await
         {
@@ -85,131 +117,91 @@ impl InvoiceEventHandler for DownloadEventHandler {
             }
         };
 
-        tracing::info!(
-            crawl_id = self.crawl_id,
-            invoice_id = db_invoice.id,
-            uuid = %db_invoice.uuid,
-            "invoice metadata saved"
-        );
+        let s3_key = crate::storage::invoice_s3_key(self.user_id, &invoice.uuid, ext);
 
-        let fiscal_period = fiscal_period_from_issued_at(&invoice.issued_at);
-        let current_period = chrono::Utc::now().format("%Y-%m").to_string();
+        if let Err(e) = self.storage.upload(&s3_key, content).await {
+            tracing::error!(
+                crawl_id = self.crawl_id,
+                uuid = %invoice.uuid,
+                ext,
+                "failed to upload to S3: {e}"
+            );
+            return;
+        }
 
-        tokio::time::sleep(tokio::time::Duration::from_secs(UPLOAD_INITIAL_DELAY_SECS)).await;
-
-        for ext in FILE_EXTENSIONS {
-            let existing_file_id = if ext == "xml" {
-                db_invoice.xml_file_id
-            } else {
-                db_invoice.pdf_file_id
-            };
-
-            if let Some(_) = existing_file_id {
-                let should_skip = match &fiscal_period {
-                    Some(fp) => fp != &current_period,
-                    None => false,
-                };
-                if should_skip {
-                    tracing::info!(
-                        crawl_id = self.crawl_id,
-                        uuid = %invoice.uuid,
-                        ext,
-                        "skipping upload — prior fiscal period, file already stored"
-                    );
-                    continue;
-                }
-            }
-
-            let local_path =
-                std::path::Path::new(&download_path).join(format!("{}.{}", invoice.uuid, ext));
-
-            let bytes = match read_with_retry(&local_path, UPLOAD_MAX_RETRIES).await {
-                Some(b) => b,
-                None => {
-                    tracing::error!(
-                        crawl_id = self.crawl_id,
-                        uuid = %invoice.uuid,
-                        ext,
-                        "file not readable after retries — leaving file_id as null"
-                    );
-                    continue;
-                }
-            };
-
-            let s3_key = crate::storage::invoice_s3_key(self.user_id, &invoice.uuid, ext);
-
-            if let Err(e) = self.storage.upload(&s3_key, bytes).await {
+        let file = match files_repo::create(&self.pool, self.user_id, &s3_key, ext).await {
+            Ok(f) => f,
+            Err(e) => {
                 tracing::error!(
                     crawl_id = self.crawl_id,
                     uuid = %invoice.uuid,
                     ext,
-                    "failed to upload to S3: {e}"
+                    "failed to save file record: {e}"
                 );
-                continue;
+                return;
             }
+        };
 
-            let file = match files_repo::create(&self.pool, self.user_id, &s3_key, ext).await {
-                Ok(f) => f,
-                Err(e) => {
-                    tracing::error!(
-                        crawl_id = self.crawl_id,
-                        uuid = %invoice.uuid,
-                        ext,
-                        "failed to save file record: {e}"
-                    );
-                    continue;
-                }
-            };
+        if let Err(e) = invoice_repo::set_file_id(&self.pool, db_invoice.id, ext, file.id).await {
+            tracing::error!(
+                crawl_id = self.crawl_id,
+                invoice_id = db_invoice.id,
+                ext,
+                "failed to set file_id on invoice: {e}"
+            );
+        } else {
+            tracing::info!(
+                crawl_id = self.crawl_id,
+                invoice_id = db_invoice.id,
+                uuid = %invoice.uuid,
+                ext,
+                s3_key,
+                "invoice file uploaded to S3"
+            );
+        }
+    }
+}
 
-            if let Err(e) = invoice_repo::set_file_id(&self.pool, db_invoice.id, ext, file.id).await
-            {
+#[async_trait]
+impl InvoiceEventHandler for DownloadEventHandler {
+    async fn should_download(&self, invoice: &satcrawler::Invoice) -> bool {
+        match invoice_repo::find_by_uuid_and_user(&self.pool, &invoice.uuid, self.user_id).await {
+            Ok(Some(inv)) => !(inv.xml_file_id.is_some() && inv.pdf_file_id.is_some()),
+            _ => true,
+        }
+    }
+
+    async fn on_invoice_event(&self, event: InvoiceEvent) {
+        match event {
+            InvoiceEvent::XmlDownloaded { invoice, content } => {
+                self.handle_file(&invoice, "xml", content).await;
+            }
+            InvoiceEvent::PdfDownloaded { invoice, content } => {
+                self.handle_file(&invoice, "pdf", content).await;
+            }
+            InvoiceEvent::XmlDownloadFailed { invoice, error } => {
                 tracing::error!(
                     crawl_id = self.crawl_id,
-                    invoice_id = db_invoice.id,
-                    ext,
-                    "failed to set file_id on invoice: {e}"
+                    uuid = %invoice.uuid,
+                    "XML download failed: {error}"
                 );
-            } else {
+            }
+            InvoiceEvent::PdfDownloadFailed { invoice, error } => {
+                tracing::error!(
+                    crawl_id = self.crawl_id,
+                    uuid = %invoice.uuid,
+                    "PDF download failed: {error}"
+                );
+            }
+            InvoiceEvent::Skipped { invoice } => {
                 tracing::info!(
                     crawl_id = self.crawl_id,
-                    invoice_id = db_invoice.id,
                     uuid = %invoice.uuid,
-                    ext,
-                    s3_key,
-                    "invoice file uploaded to S3"
+                    "invoice skipped"
                 );
             }
         }
     }
-}
-
-fn fiscal_period_from_issued_at(issued_at: &str) -> Option<String> {
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(issued_at) {
-        return Some(dt.format("%Y-%m").to_string());
-    }
-    if issued_at.len() >= 7 && issued_at.as_bytes()[4] == b'-' {
-        return Some(issued_at[..7].to_string());
-    }
-    let parts: Vec<&str> = issued_at.splitn(3, '/').collect();
-    if parts.len() == 3 && parts[2].len() >= 4 {
-        return Some(format!("{}-{:0>2}", &parts[2][..4], parts[1]));
-    }
-    None
-}
-
-async fn read_with_retry(path: &std::path::Path, max_retries: u32) -> Option<Vec<u8>> {
-    for attempt in 0..max_retries {
-        match tokio::fs::read(path).await {
-            Ok(bytes) => return Some(bytes),
-            Err(_) => {
-                if attempt + 1 < max_retries {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(UPLOAD_RETRY_DELAY_SECS))
-                        .await;
-                }
-            }
-        }
-    }
-    None
 }
 
 async fn execute(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) -> Result<(), String> {
@@ -245,7 +237,7 @@ async fn execute(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) -> Resul
                 crawl.link_id,
                 crawl_id,
                 link.user_id,
-                storage,
+                Arc::clone(&storage),
             )
             .await?
         }
@@ -258,7 +250,7 @@ async fn execute(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) -> Resul
                 crawl.link_id,
                 crawl_id,
                 link.user_id,
-                storage,
+                Arc::clone(&storage),
             )
             .await?
         }
@@ -271,7 +263,7 @@ async fn execute(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) -> Resul
                 crawl.link_id,
                 crawl_id,
                 link.user_id,
-                storage,
+                Arc::clone(&storage),
             )
             .await?
         }
@@ -289,32 +281,16 @@ async fn execute(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) -> Resul
 
     if crawl.crawl_type == "VALIDATE_CREDENTIALS" {
         if response.success {
-            link_repo::update_status(pool, crawl.link_id, "VALID")
-                .await
-                .map_err(|e| e.to_string())?;
+            crate::reactor::on_validation_succeeded(pool, storage, crawl.link_id).await?;
         } else {
-            match crawl
+            let old_credential_id = crawl
                 .params
                 .get("old_credential_id")
                 .and_then(|v| v.as_i64())
-            {
-                Some(old_id) => {
-                    let old_credential_id = i32::try_from(old_id).map_err(|e| e.to_string())?;
-                    link_repo::update_credential_and_status(
-                        pool,
-                        crawl.link_id,
-                        old_credential_id,
-                        "VALID",
-                    )
-                    .await
-                    .map_err(|e| e.to_string())?;
-                }
-                None => {
-                    link_repo::update_status(pool, crawl.link_id, "INVALID")
-                        .await
-                        .map_err(|e| e.to_string())?;
-                }
-            }
+                .map(|id| i32::try_from(id))
+                .transpose()
+                .map_err(|e| e.to_string())?;
+            crate::reactor::on_validation_failed(pool, crawl.link_id, old_credential_id).await?;
         }
     }
 
