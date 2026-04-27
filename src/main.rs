@@ -1,4 +1,5 @@
 use axum::{response::Html, routing::get, Json, Router};
+use tower_http::cors::CorsLayer;
 use sqlx::postgres::PgPoolOptions;
 use utoipa::{
     openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme},
@@ -157,7 +158,8 @@ async fn main() {
         .route("/api/docs", get(swagger_ui))
         .route("/api/docs/openapi.json", get(openapi_json))
         .nest("/api", routes::router())
-        .with_state(state);
+        .with_state(state)
+        .layer(CorsLayer::permissive());
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
 

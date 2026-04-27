@@ -9,7 +9,8 @@ CREATE TYPE crawl_status AS ENUM ('PENDING', 'RUNNING', 'COMPLETED', 'FAILED');
 
 CREATE TABLE crawls (
     id               SERIAL       PRIMARY KEY,
-    link_id          INTEGER      NOT NULL REFERENCES links(id) ON DELETE RESTRICT,
+    user_id          INTEGER      NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    link_id          INTEGER               REFERENCES links(id) ON DELETE SET NULL,
     crawl_type       crawl_type   NOT NULL,
     status           crawl_status NOT NULL DEFAULT 'PENDING',
     params           JSONB        NOT NULL DEFAULT '{}',
@@ -20,4 +21,5 @@ CREATE TABLE crawls (
     updated_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
+CREATE INDEX ON crawls (user_id);
 CREATE INDEX ON crawls (link_id);

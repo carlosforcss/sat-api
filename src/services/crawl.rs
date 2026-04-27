@@ -52,7 +52,7 @@ pub async fn create(
         .map_err(|_| CrawlError::Internal)?
         .ok_or(CrawlError::NotFound)?;
 
-    let crawl = crawl::create(pool, link_id, crawl_type, params)
+    let crawl = crawl::create(pool, user_id, link_id, crawl_type, params)
         .await
         .map_err(|e| {
             tracing::error!("failed to create crawl: {e}");

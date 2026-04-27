@@ -34,7 +34,7 @@ fn parse_sat_datetime(s: &str) -> Option<DateTime<Utc>> {
 }
 
 fn parse_sat_total(s: &str) -> Option<f64> {
-    s.replace(',', "").trim().parse::<f64>().ok()
+    s.replace(',', "").replace('$', "").trim().parse::<f64>().ok()
 }
 
 pub async fn run_crawl(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) {
@@ -101,8 +101,8 @@ impl DownloadEventHandler {
             issued_at,
             certified_at,
             total,
-            &invoice.invoice_type,
-            &invoice.invoice_status,
+            &invoice.invoice_type.to_lowercase(),
+            &invoice.invoice_status.to_lowercase(),
         )
         .await
         {
@@ -214,10 +214,14 @@ async fn execute(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) -> Resul
         .await
         .map_err(|e| e.to_string())?;
 
-    let link = link_repo::find_by_id(pool, crawl.link_id)
+    let link_id = crawl
+        .link_id
+        .ok_or_else(|| format!("crawl {crawl_id} has no link"))?;
+
+    let link = link_repo::find_by_id(pool, link_id)
         .await
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("link {} not found", crawl.link_id))?;
+        .ok_or_else(|| format!("link {link_id} not found"))?;
 
     let credential = credential_repo::find_by_id(pool, link.credential_id)
         .await
@@ -234,7 +238,7 @@ async fn execute(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) -> Resul
                 &password,
                 &crawl.params,
                 pool,
-                crawl.link_id,
+                link_id,
                 crawl_id,
                 link.user_id,
                 Arc::clone(&storage),
@@ -247,7 +251,7 @@ async fn execute(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) -> Resul
                 &password,
                 &crawl.params,
                 pool,
-                crawl.link_id,
+                link_id,
                 crawl_id,
                 link.user_id,
                 Arc::clone(&storage),
@@ -260,7 +264,7 @@ async fn execute(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) -> Resul
                 &password,
                 &crawl.params,
                 pool,
-                crawl.link_id,
+                link_id,
                 crawl_id,
                 link.user_id,
                 Arc::clone(&storage),
@@ -281,7 +285,7 @@ async fn execute(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) -> Resul
 
     if crawl.crawl_type == "VALIDATE_CREDENTIALS" {
         if response.success {
-            crate::reactor::on_validation_succeeded(pool, storage, crawl.link_id).await?;
+            crate::reactor::on_validation_succeeded(pool, storage, link_id, link.user_id).await?;
         } else {
             let old_credential_id = crawl
                 .params
@@ -290,7 +294,7 @@ async fn execute(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) -> Resul
                 .map(|id| i32::try_from(id))
                 .transpose()
                 .map_err(|e| e.to_string())?;
-            crate::reactor::on_validation_failed(pool, crawl.link_id, old_credential_id).await?;
+            crate::reactor::on_validation_failed(pool, link_id, old_credential_id).await?;
         }
     }
 

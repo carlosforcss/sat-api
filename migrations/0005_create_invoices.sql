@@ -1,4 +1,4 @@
-CREATE TYPE invoice_type_enum   AS ENUM ('ingreso', 'egreso', 'traslado', 'pago');
+CREATE TYPE invoice_type_enum   AS ENUM ('ingreso', 'egreso', 'traslado', 'nómina', 'pago');
 CREATE TYPE invoice_status_enum AS ENUM ('vigente', 'cancelado');
 
 CREATE TABLE invoices (

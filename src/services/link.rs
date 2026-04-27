@@ -20,7 +20,7 @@ impl IntoResponse for LinkError {
                 .into_response(),
             LinkError::InUse => (
                 StatusCode::CONFLICT,
-                Json(json!({ "error": "link has associated crawls or invoices" })),
+                Json(json!({ "error": "link cannot be deleted" })),
             )
                 .into_response(),
         }

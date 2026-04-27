@@ -15,7 +15,7 @@ use crate::{
 #[derive(Serialize, ToSchema)]
 pub struct CrawlResponse {
     pub id: i32,
-    pub link_id: i32,
+    pub link_id: Option<i32>,
     pub crawl_type: String,
     pub status: String,
     pub params: serde_json::Value,

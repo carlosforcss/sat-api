@@ -58,7 +58,7 @@ pub fn on_credential_created(pool: &PgPool, storage: Arc<S3Storage>, cred: &Cred
                 }
             };
 
-        match crawl_repo::create(&pool, link_id, "VALIDATE_CREDENTIALS", crawl_params).await {
+        match crawl_repo::create(&pool, user_id, link_id, "VALIDATE_CREDENTIALS", crawl_params).await {
             Ok(crawl) => {
                 tracing::info!(credential_id, link_id, crawl_id = crawl.id, "reactor: spawning VALIDATE_CREDENTIALS");
                 crate::services::crawl::spawn(&pool, crawl.id, storage);
@@ -75,8 +75,9 @@ pub async fn on_validation_succeeded(
     pool: &PgPool,
     storage: Arc<S3Storage>,
     link_id: i32,
+    user_id: i32,
 ) -> Result<(), String> {
-    tracing::info!(link_id, "reactor: validation_succeeded → spawning DOWNLOAD_ISSUED + DOWNLOAD_RECEIVED");
+    tracing::info!(link_id, user_id, "reactor: validation_succeeded → spawning DOWNLOAD_ISSUED + DOWNLOAD_RECEIVED");
 
     link_repo::update_status(pool, link_id, "VALID")
         .await
@@ -85,6 +86,7 @@ pub async fn on_validation_succeeded(
     for crawl_type in &["DOWNLOAD_ISSUED_INVOICES", "DOWNLOAD_RECEIVED_INVOICES"] {
         match crawl_repo::create(
             pool,
+            user_id,
             link_id,
             crawl_type,
             serde_json::json!({ "start_date": "01/01/2017" }),
