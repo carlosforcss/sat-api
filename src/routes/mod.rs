@@ -4,6 +4,7 @@ pub mod credential;
 pub mod health;
 pub mod invoice;
 pub mod link;
+pub mod taxpayer;
 
 pub fn default_page() -> i64 {
     1
@@ -32,11 +33,16 @@ pub fn router() -> Router<AppState> {
             "/credentials/{id}",
             axum::routing::delete(credential::delete_credential),
         )
+        .route("/invoices/parse-all", post(invoice::parse_all_invoices))
         .route("/invoices", get(invoice::list_invoices))
+        .route("/invoices/{invoice_id}", get(invoice::get_invoice))
         .route("/invoices/{invoice_id}/xml", get(invoice::get_invoice_xml))
         .route("/invoices/{invoice_id}/pdf", get(invoice::get_invoice_pdf))
+        .route("/invoices/{invoice_id}/parse", get(invoice::parse_invoice))
         .route("/links", get(link::list_links))
         .route("/links/{id}", axum::routing::delete(link::delete_link))
+        .route("/taxpayers", get(taxpayer::list_taxpayers))
+        .route("/taxpayers/{id}", get(taxpayer::get_taxpayer))
         .route("/crawls", get(crawl::list_crawls).post(crawl::create_crawl))
         .route("/crawls/{id}", get(crawl::get_crawl))
 }

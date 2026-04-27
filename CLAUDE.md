@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Running the project
 
-Everything runs through Docker Compose — do not run Postgres or the API directly on the host.
+Docker Compose runs all three services (Postgres, MinIO, API). The API image uses `cargo watch -x run` for hot reload; compiled artifacts live in the `cargo_target` named volume so they survive container restarts.
 
 ```bash
 # Start all services (builds the API image on first run)
@@ -13,33 +13,40 @@ docker compose up --build
 # Rebuild the API image after code changes
 docker compose up --build api
 
-# Start only Postgres (useful when running the API locally with cargo)
-docker compose up postgres
+# Start only Postgres + MinIO (useful when running the API locally with cargo)
+docker compose up postgres minio
 ```
 
-For local development without Docker (requires Postgres running separately):
+For local development without Docker (requires Postgres and MinIO running separately):
 
 ```bash
 cargo run          # starts the API on :8000
 cargo check        # type-check without building
 cargo build        # debug build
-cargo build --release
 ```
 
 ## Environment variables
 
-Copy `.env.example` to `.env` before running locally. The only required variable is:
+Copy `.env.example` to `.env` before running. All variables in `.env.example` are required:
 
-```
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/satcli
-RUST_LOG=info      # controls tracing output level
-```
+| Variable | Description |
+|---|---|
+| `DATABASE_URL` | Postgres connection string |
+| `RUST_LOG` | Tracing level (`info,chromiumoxide=off` recommended) |
+| `JWT_SECRET` | Secret for signing/verifying JWT tokens |
+| `UPLOAD_PATH` | Local path for FIEL certificate uploads |
+| `TWOCAPTCHA_API_KEY` | 2captcha API key (used by the SAT crawler) |
+| `CREDENTIAL_ENCRYPTION_KEY` | 32-byte key for AES-GCM credential encryption |
+| `S3_BUCKET` | S3/MinIO bucket name |
+| `AWS_REGION` | AWS/MinIO region |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Credentials (use `minioadmin` locally) |
+| `AWS_ENDPOINT_URL` | Override endpoint for local MinIO (`http://localhost:9000`) |
 
-When running via Docker Compose the `api` service injects these automatically (host is `postgres`, not `localhost`).
+When running via Docker Compose the `api` service injects these automatically (DB host is `postgres`, MinIO host is `minio`).
 
 ## Database migrations
 
-Migrations live in `migrations/` and are run automatically on startup via `sqlx::migrate!()`. To add a new migration, create a file named `migrations/YYYYMMDDHHMMSS_description.sql`. sqlx runs them in filename order and tracks applied migrations in the `_sqlx_migrations` table.
+Migrations live in `migrations/` and run automatically on startup via `sqlx::migrate!()`. Add new migrations as `migrations/NNNN_description.sql` — sqlx runs them in filename order and tracks applied migrations in `_sqlx_migrations`.
 
 ## Guiding principle
 
@@ -47,15 +54,15 @@ Always take the simplest approach that satisfies the requirement. Do not add abs
 
 ## Architecture
 
-`main.rs` is the entry point — it wires together the DB pool, runs migrations, registers routes, and starts the server. There is no framework-level config file; everything is done in code.
+`main.rs` is the entry point — it wires together the DB pool, runs migrations, builds `AppState`, registers routes, and starts the server.
 
-**State** — `AppState` (defined in `main.rs`) holds the `sqlx::PgPool` and is injected into handlers via axum's `State` extractor. It must be `Clone`.
+**State** — `AppState` (in `main.rs`) holds the `sqlx::PgPool`, `jwt_secret`, `upload_path`, and an `Arc<S3Storage>`. It is injected into handlers via axum's `State` extractor and must be `Clone`.
 
-**Layer structure** — the codebase follows a three-layer pattern:
+**Layer structure**
 
 ```
-src/routes/      — HTTP handlers (axum extractors, request/response shapes, utoipa annotations)
-src/services/    — business logic (orchestrates repositories, owns domain rules)
+src/routes/       — HTTP handlers (axum extractors, request/response shapes, utoipa annotations)
+src/services/     — business logic (orchestrates repositories, owns domain rules)
 src/repositories/ — database access (raw sqlx queries, one file per entity)
 ```
 
@@ -63,21 +70,32 @@ Rules:
 - Routes call services. Routes never touch the DB directly.
 - Services call repositories. Services never write raw SQL.
 - Repositories only query the DB — no business logic.
-- No aggregator layer. Domain objects are plain Rust structs; keep them in the module they belong to until there is a concrete reason to move them.
 
-**Reactor** — `src/reactor.rs` is the single place for all domain event reactions ("when A happens, do B"). Any time a completed action should trigger a background side effect, add a function here. Current reactions:
+**Shared module helpers**
+- `repositories::is_fk_violation(e: &sqlx::Error) -> bool` — checks for Postgres error code 23503.
+- `services::paginate(page, per_page) -> (page, per_page, offset)` — clamps `per_page` to 1–100 and `page` ≥ 1 before computing offset. Always call this before passing limit/offset to a repository.
 
-- `on_credential_created` — called by services after credential creation; sets up the link and spawns a `VALIDATE_CREDENTIALS` crawl.
-- `on_validation_succeeded` — called by the crawler after successful validation; marks link `VALID` and spawns `DOWNLOAD_ISSUED_INVOICES` + `DOWNLOAD_RECEIVED_INVOICES` crawls.
-- `on_validation_failed` — called by the crawler on failure; restores the previous credential or marks the link `INVALID`.
+**Storage** — `src/storage.rs` wraps the AWS S3 SDK as `S3Storage`. Invoice files are keyed as `invoices/{user_id}/{uuid}/{uuid}.{extension}` via `storage::invoice_s3_key(user_id, uuid, extension)`. Locally, MinIO provides a compatible S3 endpoint.
 
-Each reactor function emits a structured `tracing::info!` log with the prefix `reactor:` so the full event chain is visible with `RUST_LOG=info`.
+**Reactor** — `src/reactor.rs` is the single place for domain event reactions. Any time a completed action should trigger a background side effect, add a function here. Current reactions:
 
-**Crawl execution** — `services/crawl.rs::spawn` runs each crawl in a dedicated `std::thread` with its own tokio runtime. This isolation is required because the underlying crawler uses headless Chromium (via `chromiumoxide`), which cannot share the axum tokio runtime. A global semaphore (`MAX_CONCURRENT_CRAWLS = 3`) caps concurrent crawl threads.
+- `on_credential_created` — sets up the link and spawns a `VALIDATE_CREDENTIALS` crawl.
+- `on_validation_succeeded` — marks link `VALID`, spawns `DOWNLOAD_ISSUED_INVOICES` + `DOWNLOAD_RECEIVED_INVOICES` crawls.
+- `on_validation_failed` — restores the previous credential or marks the link `INVALID`.
 
-**OpenAPI / Swagger** — `utoipa` generates the spec from `#[utoipa::path]` macros on each handler. `ApiDoc` in `main.rs` collects all paths. The spec is served at `GET /api/docs/openapi.json` and the Swagger UI at `GET /api/docs`.
+Each reactor function emits a `tracing::info!` log with the prefix `reactor:` so the full event chain is visible at `RUST_LOG=info`.
 
-**Router assembly** — `swagger_ui` and `openapi_json` handlers are stateless, so they are registered directly on the top-level `Router` before `.with_state(state)` is called. Stateful routes go inside `routes::router()`.
+**Crawl execution** — `services/crawl.rs::spawn` runs each crawl in a dedicated `std::thread` with its own tokio runtime. This isolation is required because the crawler uses headless Chromium (`chromiumoxide`), which cannot share the axum tokio runtime. A global semaphore caps `MAX_CONCURRENT_CRAWLS = 3`. Recognized crawl types: `VALIDATE_CREDENTIALS`, `DOWNLOAD_INVOICES`, `DOWNLOAD_ISSUED_INVOICES`, `DOWNLOAD_RECEIVED_INVOICES`.
+
+**External crates** (both from the same private git repo)
+- `satcrawler` — headless Chromium crawler that logs into the SAT portal and downloads CFDI XMLs/PDFs. Exposes `Crawler`, `CrawlerType`, `InvoiceEventHandler`, and date parsing utilities.
+- `sat-cfdi` — pure Rust parser for Mexican CFDI XML invoices. Key API: `parse_bytes(&[u8]) -> Result<Invoice, CfdiError>` and `parse_cfdi_datetime(&str) -> Result<NaiveDateTime, ParseError>`. The parsed `Invoice` struct mirrors the CFDI 4.0 schema (`issuer`, `recipient`, `line_items`, `taxes`, etc.).
+
+**Auth** — `src/extractors.rs` defines `AuthUser`, an axum extractor that validates the `Authorization: Bearer <JWT>` header and injects `user_id: i32` into handlers. All user-scoped data uses this `user_id` as a filter — there is no admin bypass.
+
+**OpenAPI / Swagger** — `utoipa` generates the spec from `#[utoipa::path]` macros. `ApiDoc` in `main.rs` collects all paths and schemas. Spec at `GET /api/docs/openapi.json`, UI at `GET /api/docs`.
+
+**Router assembly** — `swagger_ui` and `openapi_json` are stateless and registered on the top-level `Router` before `.with_state(state)`. Stateful routes go inside `routes::router()`. Register path-param routes (`/invoices/{id}`) after any literal-segment routes at the same prefix (`/invoices/parse-all`) to avoid axum treating the literal as an ID.
 
 ## Adding a new endpoint
 
@@ -85,4 +103,4 @@ Each reactor function emits a structured `tracing::info!` log with the prefix `r
 2. Create `src/services/<domain>.rs` — business logic calling the repository.
 3. Create `src/routes/<domain>.rs` — handler with `#[utoipa::path]`, calls the service.
 4. Register the module and route in `src/routes/mod.rs`.
-5. Add the handler path to `#[openapi(paths(...))]` in `main.rs`.
+5. Add the handler path and any new schemas to `#[openapi(paths(...), components(schemas(...)))]` in `main.rs`.

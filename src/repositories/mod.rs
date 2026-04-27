@@ -2,7 +2,9 @@ pub mod crawl;
 pub mod credential;
 pub mod files;
 pub mod invoice;
+pub mod invoice_item;
 pub mod link;
+pub mod taxpayer;
 pub mod user;
 
 pub fn is_fk_violation(e: &sqlx::Error) -> bool {

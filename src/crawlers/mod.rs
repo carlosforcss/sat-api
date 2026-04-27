@@ -19,7 +19,12 @@ fn parse_sat_datetime(s: &str) -> Option<DateTime<Utc>> {
     if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
         return Some(dt.with_timezone(&Utc));
     }
-    for fmt in &["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y"] {
+    for fmt in &[
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%d/%m/%Y %H:%M:%S",
+        "%d/%m/%Y",
+    ] {
         if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, fmt)
             .map(|ndt| ndt.and_utc())
             .or_else(|_| {
@@ -34,7 +39,11 @@ fn parse_sat_datetime(s: &str) -> Option<DateTime<Utc>> {
 }
 
 fn parse_sat_total(s: &str) -> Option<f64> {
-    s.replace(',', "").replace('$', "").trim().parse::<f64>().ok()
+    s.replace(',', "")
+        .replace('$', "")
+        .trim()
+        .parse::<f64>()
+        .ok()
 }
 
 pub async fn run_crawl(pool: &PgPool, crawl_id: i32, storage: Arc<S3Storage>) {

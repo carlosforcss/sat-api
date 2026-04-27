@@ -5,8 +5,8 @@ use serde_json::json;
 use sqlx::PgPool;
 use tokio::io::AsyncWriteExt;
 
-use crate::repositories::credential::Credential;
 use crate::repositories::credential;
+use crate::repositories::credential::Credential;
 use crate::storage::S3Storage;
 
 pub enum CredentialError {

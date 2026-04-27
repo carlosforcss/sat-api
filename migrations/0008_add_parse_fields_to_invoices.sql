@@ -1,0 +1,18 @@
+ALTER TABLE invoices
+    ADD COLUMN parsed                  BOOLEAN,
+    ADD COLUMN parsing_error           TEXT,
+    ADD COLUMN version                 TEXT,
+    ADD COLUMN series                  TEXT,
+    ADD COLUMN payment_form            TEXT,
+    ADD COLUMN payment_conditions      TEXT,
+    ADD COLUMN subtotal                NUMERIC,
+    ADD COLUMN discount                NUMERIC,
+    ADD COLUMN currency                TEXT,
+    ADD COLUMN exchange_rate           NUMERIC,
+    ADD COLUMN export                  TEXT,
+    ADD COLUMN payment_method          TEXT,
+    ADD COLUMN issue_place             TEXT,
+    ADD COLUMN certificate_number      TEXT,
+    ADD COLUMN cfdi_use                TEXT,
+    ADD COLUMN issuer_fiscal_regime    TEXT,
+    ADD COLUMN recipient_fiscal_regime TEXT;

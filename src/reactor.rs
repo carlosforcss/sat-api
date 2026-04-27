@@ -44,10 +44,7 @@ pub fn on_credential_created(pool: &PgPool, storage: Arc<S3Storage>, cred: &Cred
                     match link_repo::create(&pool, user_id, credential_id, &taxpayer_id).await {
                         Ok(link) => (link.id, serde_json::json!({})),
                         Err(e) => {
-                            tracing::error!(
-                                credential_id,
-                                "reactor: failed to create link: {e}"
-                            );
+                            tracing::error!(credential_id, "reactor: failed to create link: {e}");
                             return;
                         }
                     }
@@ -58,13 +55,30 @@ pub fn on_credential_created(pool: &PgPool, storage: Arc<S3Storage>, cred: &Cred
                 }
             };
 
-        match crawl_repo::create(&pool, user_id, link_id, "VALIDATE_CREDENTIALS", crawl_params).await {
+        match crawl_repo::create(
+            &pool,
+            user_id,
+            link_id,
+            "VALIDATE_CREDENTIALS",
+            crawl_params,
+        )
+        .await
+        {
             Ok(crawl) => {
-                tracing::info!(credential_id, link_id, crawl_id = crawl.id, "reactor: spawning VALIDATE_CREDENTIALS");
+                tracing::info!(
+                    credential_id,
+                    link_id,
+                    crawl_id = crawl.id,
+                    "reactor: spawning VALIDATE_CREDENTIALS"
+                );
                 crate::services::crawl::spawn(&pool, crawl.id, storage);
             }
             Err(e) => {
-                tracing::error!(credential_id, link_id, "reactor: failed to create validation crawl: {e}");
+                tracing::error!(
+                    credential_id,
+                    link_id,
+                    "reactor: failed to create validation crawl: {e}"
+                );
             }
         }
     });
@@ -77,7 +91,11 @@ pub async fn on_validation_succeeded(
     link_id: i32,
     user_id: i32,
 ) -> Result<(), String> {
-    tracing::info!(link_id, user_id, "reactor: validation_succeeded → spawning DOWNLOAD_ISSUED + DOWNLOAD_RECEIVED");
+    tracing::info!(
+        link_id,
+        user_id,
+        "reactor: validation_succeeded → spawning DOWNLOAD_ISSUED + DOWNLOAD_RECEIVED"
+    );
 
     link_repo::update_status(pool, link_id, "VALID")
         .await
@@ -94,11 +112,20 @@ pub async fn on_validation_succeeded(
         .await
         {
             Ok(c) => {
-                tracing::info!(link_id, crawl_id = c.id, crawl_type, "reactor: spawning download crawl");
+                tracing::info!(
+                    link_id,
+                    crawl_id = c.id,
+                    crawl_type,
+                    "reactor: spawning download crawl"
+                );
                 crate::services::crawl::spawn(pool, c.id, Arc::clone(&storage));
             }
             Err(e) => {
-                tracing::error!(link_id, crawl_type, "reactor: failed to create download crawl: {e}");
+                tracing::error!(
+                    link_id,
+                    crawl_type,
+                    "reactor: failed to create download crawl: {e}"
+                );
             }
         }
     }

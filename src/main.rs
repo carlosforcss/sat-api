@@ -1,6 +1,6 @@
 use axum::{response::Html, routing::get, Json, Router};
-use tower_http::cors::CorsLayer;
 use sqlx::postgres::PgPoolOptions;
+use tower_http::cors::CorsLayer;
 use utoipa::{
     openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme},
     Modify, OpenApi,
@@ -58,8 +58,13 @@ impl Modify for BearerAuth {
         routes::link::list_links,
         routes::link::delete_link,
         routes::invoice::list_invoices,
+        routes::invoice::get_invoice,
         routes::invoice::get_invoice_xml,
         routes::invoice::get_invoice_pdf,
+        routes::invoice::parse_invoice,
+        routes::invoice::parse_all_invoices,
+        routes::taxpayer::list_taxpayers,
+        routes::taxpayer::get_taxpayer,
     ),
     components(schemas(
         routes::auth::RegisterRequest,
@@ -77,6 +82,12 @@ impl Modify for BearerAuth {
         routes::link::LinkPage,
         routes::invoice::InvoiceResponse,
         routes::invoice::InvoicePage,
+        routes::invoice::InvoiceDetailResponse,
+        routes::invoice::InvoiceItemResponse,
+        routes::invoice::InvoiceItemTaxResponse,
+        routes::invoice::ParseAllResponse,
+        routes::taxpayer::TaxpayerResponse,
+        routes::taxpayer::TaxpayerPage,
     )),
     info(
         title = "SAT API",
