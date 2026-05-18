@@ -158,15 +158,26 @@ impl DownloadEventHandler {
                 ext,
                 "failed to set file_id on invoice: {e}"
             );
-        } else {
-            tracing::info!(
-                crawl_id = self.crawl_id,
-                invoice_id = db_invoice.id,
-                uuid = %invoice.uuid,
-                ext,
-                s3_key,
-                "invoice file uploaded to S3"
-            );
+            return;
+        }
+
+        tracing::info!(
+            crawl_id = self.crawl_id,
+            invoice_id = db_invoice.id,
+            uuid = %invoice.uuid,
+            ext,
+            s3_key,
+            "invoice file uploaded to S3"
+        );
+
+        if ext == "xml" {
+            crate::reactor::on_xml_downloaded(
+                &self.pool,
+                Arc::clone(&self.storage),
+                self.user_id,
+                db_invoice.id,
+            )
+            .await;
         }
     }
 }

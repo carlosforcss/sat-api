@@ -1975,7 +1975,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -3142,7 +3142,7 @@ dependencies = [
 [[package]]
 name = "sat-cfdi"
 version = "0.0.1"
-source = "git+https://github.com/carlosforcss/sat-cli#121cc7537d3ba022509d386e28f519f033a2f587"
+source = "git+https://github.com/carlosforcss/sat-cli#69e9f541301832afc4c83735668c635b69bae286"
 dependencies = [
  "chrono",
  "quick-xml",
@@ -3154,7 +3154,7 @@ dependencies = [
 [[package]]
 name = "satcrawler"
 version = "0.0.1"
-source = "git+https://github.com/carlosforcss/sat-cli#121cc7537d3ba022509d386e28f519f033a2f587"
+source = "git+https://github.com/carlosforcss/sat-cli#69e9f541301832afc4c83735668c635b69bae286"
 dependencies = [
  "async-trait",
  "base64",

@@ -9,6 +9,7 @@ use chrono::{TimeZone, Utc};
 use crate::repositories::files as files_repo;
 use crate::repositories::invoice::{self, Invoice, InvoiceFilters};
 use crate::repositories::invoice_item;
+use crate::repositories::invoice_related_document;
 use crate::repositories::taxpayer::{self as taxpayer_repo, TaxpayerData};
 use crate::storage::S3Storage;
 use sat_cfdi;
@@ -189,6 +190,19 @@ pub async fn parse_invoice(
                 tracing::error!("failed to persist items for invoice {invoice_id}: {e}");
                 return Err(InvoiceError::Internal);
             }
+            if let Err(e) = invoice_related_document::replace_for_invoice(
+                pool,
+                invoice_id,
+                user_id,
+                &cfdi.related_cfdis,
+            )
+            .await
+            {
+                tracing::error!(
+                    "failed to persist related documents for invoice {invoice_id}: {e}"
+                );
+                return Err(InvoiceError::Internal);
+            }
             Ok(serde_json::to_value(cfdi).unwrap())
         }
         Err(e) => {
@@ -273,6 +287,21 @@ pub async fn parse_all(
                 } else {
                     false
                 };
+                if items_ok {
+                    if let Err(e) = invoice_related_document::replace_for_invoice(
+                        pool,
+                        inv.id,
+                        user_id,
+                        &cfdi.related_cfdis,
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            "bulk parse: failed to persist related documents for invoice {}: {e}",
+                            inv.id
+                        );
+                    }
+                }
                 if parse_ok && items_ok {
                     succeeded += 1;
                 } else {

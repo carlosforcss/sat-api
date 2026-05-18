@@ -15,6 +15,7 @@ use crate::{
     extractors::AuthUser,
     repositories::invoice::{Invoice, InvoiceFilters},
     repositories::invoice_item::{InvoiceItem, InvoiceItemTax},
+    repositories::invoice_related_document::RelatedDocument,
     services::invoice::{self as invoice_service, InvoiceError},
     AppState,
 };
@@ -151,6 +152,25 @@ pub struct InvoiceResponse {
 }
 
 #[derive(Serialize, ToSchema)]
+pub struct RelatedDocumentResponse {
+    pub id: i32,
+    pub relation_type: String,
+    pub related_uuid: String,
+    pub related_invoice_id: Option<i32>,
+}
+
+impl From<RelatedDocument> for RelatedDocumentResponse {
+    fn from(r: RelatedDocument) -> Self {
+        RelatedDocumentResponse {
+            id: r.id,
+            relation_type: r.relation_type,
+            related_uuid: r.related_uuid,
+            related_invoice_id: r.related_invoice_id,
+        }
+    }
+}
+
+#[derive(Serialize, ToSchema)]
 pub struct InvoiceItemTaxResponse {
     pub id: i32,
     pub tax_type: String,
@@ -259,12 +279,14 @@ pub struct InvoiceDetailResponse {
     pub recipient_fiscal_regime: Option<String>,
     pub created_at: DateTime<Utc>,
     pub items: Vec<InvoiceItemResponse>,
+    pub related_documents: Vec<RelatedDocumentResponse>,
 }
 
 impl InvoiceDetailResponse {
-    pub fn from_invoice_and_items(
+    pub fn from_parts(
         inv: Invoice,
         items: Vec<(InvoiceItem, Vec<InvoiceItemTax>)>,
+        related_documents: Vec<RelatedDocument>,
     ) -> Self {
         InvoiceDetailResponse {
             id: inv.id,
@@ -303,6 +325,10 @@ impl InvoiceDetailResponse {
             recipient_fiscal_regime: inv.recipient_fiscal_regime,
             created_at: inv.created_at,
             items: items.into_iter().map(InvoiceItemResponse::from).collect(),
+            related_documents: related_documents
+                .into_iter()
+                .map(RelatedDocumentResponse::from)
+                .collect(),
         }
     }
 }
@@ -444,17 +470,32 @@ pub async fn get_invoice(
         Err(e) => return e.into_response(),
     };
 
-    match crate::repositories::invoice_item::list_for_invoice(&state.db, invoice_id, auth.user_id)
-        .await
+    let items =
+        match crate::repositories::invoice_item::list_for_invoice(&state.db, invoice_id, auth.user_id)
+            .await
+        {
+            Ok(items) => items,
+            Err(e) => {
+                tracing::error!("failed to fetch items for invoice {invoice_id}: {e}");
+                return InvoiceError::Internal.into_response();
+            }
+        };
+
+    let related_documents = match crate::repositories::invoice_related_document::list_for_invoice(
+        &state.db,
+        invoice_id,
+        auth.user_id,
+    )
+    .await
     {
-        Ok(items) => {
-            Json(InvoiceDetailResponse::from_invoice_and_items(inv, items)).into_response()
-        }
+        Ok(docs) => docs,
         Err(e) => {
-            tracing::error!("failed to fetch items for invoice {invoice_id}: {e}");
-            InvoiceError::Internal.into_response()
+            tracing::error!("failed to fetch related documents for invoice {invoice_id}: {e}");
+            return InvoiceError::Internal.into_response();
         }
-    }
+    };
+
+    Json(InvoiceDetailResponse::from_parts(inv, items, related_documents)).into_response()
 }
 
 #[utoipa::path(

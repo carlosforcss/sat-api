@@ -133,6 +133,24 @@ pub async fn on_validation_succeeded(
     Ok(())
 }
 
+/// XML file saved for an invoice → parse it immediately.
+pub async fn on_xml_downloaded(
+    pool: &PgPool,
+    storage: Arc<S3Storage>,
+    user_id: i32,
+    invoice_id: i32,
+) {
+    tracing::info!(invoice_id, user_id, "reactor: xml_downloaded → parsing invoice");
+    match crate::services::invoice::parse_invoice(pool, storage, user_id, invoice_id).await {
+        Ok(_) => tracing::info!(invoice_id, "reactor: invoice parsed successfully"),
+        Err(crate::services::invoice::InvoiceError::ParseFailed(msg)) => tracing::warn!(
+            invoice_id,
+            "reactor: invoice parse failed: {msg}"
+        ),
+        Err(_) => tracing::error!(invoice_id, "reactor: invoice parse error"),
+    }
+}
+
 /// VALIDATE_CREDENTIALS crawl failed → restore old credential or mark link INVALID.
 pub async fn on_validation_failed(
     pool: &PgPool,
