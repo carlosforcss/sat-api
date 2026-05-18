@@ -91,6 +91,7 @@ pub struct InvoiceQueryParams {
     // taxpayer FK
     pub issuer_id: Option<i32>,
     pub receiver_id: Option<i32>,
+    pub taxpayer_id: Option<i32>,
     // ranges
     pub issued_from: Option<DateTime<Utc>>,
     pub issued_to: Option<DateTime<Utc>>,
@@ -398,6 +399,7 @@ pub async fn list_invoices(
         issued_to: params.issued_to,
         total_min: params.total_min,
         total_max: params.total_max,
+        taxpayer_id: params.taxpayer_id,
     };
 
     match invoice_service::list(

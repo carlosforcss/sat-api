@@ -70,6 +70,8 @@ pub struct InvoiceFilters {
     // taxpayer FK
     pub issuer_id: Option<i32>,
     pub receiver_id: Option<i32>,
+    // either side taxpayer FK
+    pub taxpayer_id: Option<i32>,
     // ranges
     pub issued_from: Option<DateTime<Utc>>,
     pub issued_to: Option<DateTime<Utc>>,
@@ -223,7 +225,8 @@ pub async fn list_for_user(
         AND ($25::TIMESTAMPTZ IS NULL OR issued_at >= $25)
         AND ($26::TIMESTAMPTZ IS NULL OR issued_at <= $26)
         AND ($27::FLOAT8 IS NULL OR total >= $27)
-        AND ($28::FLOAT8 IS NULL OR total <= $28)";
+        AND ($28::FLOAT8 IS NULL OR total <= $28)
+        AND ($29::INT IS NULL OR issuer_id = $29 OR receiver_id = $29)";
 
     macro_rules! bind_filters {
         ($q:expr, $f:expr) => {
@@ -255,6 +258,7 @@ pub async fn list_for_user(
                 .bind($f.issued_to)
                 .bind($f.total_min)
                 .bind($f.total_max)
+                .bind($f.taxpayer_id)
         };
     }
 
@@ -267,7 +271,7 @@ pub async fn list_for_user(
 
     let rows = bind_filters!(
         sqlx::query_as::<_, Invoice>(&format!(
-            "SELECT {SELECT_COLUMNS} FROM invoices {where_clause} ORDER BY issued_at DESC LIMIT $29 OFFSET $30"
+            "SELECT {SELECT_COLUMNS} FROM invoices {where_clause} ORDER BY issued_at DESC LIMIT $30 OFFSET $31"
         )),
         filters
     )
