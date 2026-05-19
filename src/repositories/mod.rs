@@ -3,6 +3,7 @@ pub mod credential;
 pub mod files;
 pub mod invoice;
 pub mod invoice_item;
+pub mod invoice_payment;
 pub mod invoice_related_document;
 pub mod link;
 pub mod taxpayer;

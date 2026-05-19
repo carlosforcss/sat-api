@@ -15,6 +15,9 @@ use crate::{
     extractors::AuthUser,
     repositories::invoice::{Invoice, InvoiceFilters},
     repositories::invoice_item::{InvoiceItem, InvoiceItemTax},
+    repositories::invoice_payment::{
+        InvoicePayment, PaymentComplement, PaymentDocumentTax, PaymentRelatedDocument,
+    },
     repositories::invoice_related_document::RelatedDocument,
     services::invoice::{self as invoice_service, InvoiceError},
     AppState,
@@ -171,6 +174,226 @@ impl From<RelatedDocument> for RelatedDocumentResponse {
 }
 
 #[derive(Serialize, ToSchema)]
+pub struct PaymentDocumentTaxResponse {
+    pub id: i32,
+    pub tax_type: String,
+    pub tax: String,
+    pub factor_type: Option<String>,
+    pub base: Option<f64>,
+    pub rate_or_amount: Option<f64>,
+    pub amount: Option<f64>,
+}
+
+impl From<PaymentDocumentTax> for PaymentDocumentTaxResponse {
+    fn from(t: PaymentDocumentTax) -> Self {
+        PaymentDocumentTaxResponse {
+            id: t.id,
+            tax_type: t.tax_type,
+            tax: t.tax,
+            factor_type: t.factor_type,
+            base: t.base,
+            rate_or_amount: t.rate_or_amount,
+            amount: t.amount,
+        }
+    }
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct PaymentRelatedDocumentResponse {
+    pub id: i32,
+    pub document_id: String,
+    pub related_invoice_id: Option<i32>,
+    pub series: Option<String>,
+    pub fiscal_id: Option<String>,
+    pub document_currency: String,
+    pub exchange_equivalence: Option<f64>,
+    pub installment_number: i32,
+    pub previous_balance: f64,
+    pub paid_amount: f64,
+    pub outstanding_balance: f64,
+    pub tax_object: String,
+    pub total_transferred_tax: f64,
+    pub total_withheld_tax: f64,
+    pub taxes: Vec<PaymentDocumentTaxResponse>,
+}
+
+impl From<(PaymentRelatedDocument, Vec<PaymentDocumentTax>)> for PaymentRelatedDocumentResponse {
+    fn from((d, taxes): (PaymentRelatedDocument, Vec<PaymentDocumentTax>)) -> Self {
+        PaymentRelatedDocumentResponse {
+            id: d.id,
+            document_id: d.document_id,
+            related_invoice_id: d.related_invoice_id,
+            series: d.series,
+            fiscal_id: d.fiscal_id,
+            document_currency: d.document_currency,
+            exchange_equivalence: d.exchange_equivalence,
+            installment_number: d.installment_number,
+            previous_balance: d.previous_balance,
+            paid_amount: d.paid_amount,
+            outstanding_balance: d.outstanding_balance,
+            tax_object: d.tax_object,
+            total_transferred_tax: d.total_transferred_tax,
+            total_withheld_tax: d.total_withheld_tax,
+            taxes: taxes.into_iter().map(PaymentDocumentTaxResponse::from).collect(),
+        }
+    }
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct PaymentResponse {
+    pub id: i32,
+    pub complement_id: i32,
+    pub invoice_id: i32,
+    pub payment_date: DateTime<Utc>,
+    pub payment_form: String,
+    pub currency: String,
+    pub exchange_rate: Option<f64>,
+    pub amount: f64,
+    pub operation_number: Option<String>,
+    pub ordering_account_issuer_tax_id: Option<String>,
+    pub bank_name: Option<String>,
+    pub ordering_account: Option<String>,
+    pub beneficiary_account_issuer_tax_id: Option<String>,
+    pub beneficiary_account: Option<String>,
+    pub total_transferred_tax: f64,
+    pub total_withheld_tax: f64,
+    pub related_documents: Vec<PaymentRelatedDocumentResponse>,
+}
+
+impl From<(InvoicePayment, Vec<(PaymentRelatedDocument, Vec<PaymentDocumentTax>)>)>
+    for PaymentResponse
+{
+    fn from(
+        (p, docs): (InvoicePayment, Vec<(PaymentRelatedDocument, Vec<PaymentDocumentTax>)>),
+    ) -> Self {
+        PaymentResponse {
+            id: p.id,
+            complement_id: p.complement_id,
+            invoice_id: p.invoice_id,
+            payment_date: p.payment_date,
+            payment_form: p.payment_form,
+            currency: p.currency,
+            exchange_rate: p.exchange_rate,
+            amount: p.amount,
+            operation_number: p.operation_number,
+            ordering_account_issuer_tax_id: p.ordering_account_issuer_tax_id,
+            bank_name: p.bank_name,
+            ordering_account: p.ordering_account,
+            beneficiary_account_issuer_tax_id: p.beneficiary_account_issuer_tax_id,
+            beneficiary_account: p.beneficiary_account,
+            total_transferred_tax: p.total_transferred_tax,
+            total_withheld_tax: p.total_withheld_tax,
+            related_documents: docs
+                .into_iter()
+                .map(PaymentRelatedDocumentResponse::from)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct PaymentComplementResponse {
+    pub id: i32,
+    pub invoice_id: i32,
+    pub version: String,
+    pub total_payments_amount: Option<f64>,
+    pub total_iva_withheld: Option<f64>,
+    pub total_isr_withheld: Option<f64>,
+    pub total_ieps_withheld: Option<f64>,
+    pub total_transferred_iva_base_16: Option<f64>,
+    pub total_transferred_iva_tax_16: Option<f64>,
+    pub total_transferred_iva_base_8: Option<f64>,
+    pub total_transferred_iva_tax_8: Option<f64>,
+    pub total_transferred_iva_base_0: Option<f64>,
+    pub total_transferred_iva_tax_0: Option<f64>,
+    pub total_transferred_iva_base_exempt: Option<f64>,
+    pub payments: Vec<PaymentResponse>,
+}
+
+impl
+    From<(
+        PaymentComplement,
+        Vec<(InvoicePayment, Vec<(PaymentRelatedDocument, Vec<PaymentDocumentTax>)>)>,
+    )> for PaymentComplementResponse
+{
+    fn from(
+        (c, payments): (
+            PaymentComplement,
+            Vec<(InvoicePayment, Vec<(PaymentRelatedDocument, Vec<PaymentDocumentTax>)>)>,
+        ),
+    ) -> Self {
+        PaymentComplementResponse {
+            id: c.id,
+            invoice_id: c.invoice_id,
+            version: c.version,
+            total_payments_amount: c.total_payments_amount,
+            total_iva_withheld: c.total_iva_withheld,
+            total_isr_withheld: c.total_isr_withheld,
+            total_ieps_withheld: c.total_ieps_withheld,
+            total_transferred_iva_base_16: c.total_transferred_iva_base_16,
+            total_transferred_iva_tax_16: c.total_transferred_iva_tax_16,
+            total_transferred_iva_base_8: c.total_transferred_iva_base_8,
+            total_transferred_iva_tax_8: c.total_transferred_iva_tax_8,
+            total_transferred_iva_base_0: c.total_transferred_iva_base_0,
+            total_transferred_iva_tax_0: c.total_transferred_iva_tax_0,
+            total_transferred_iva_base_exempt: c.total_transferred_iva_base_exempt,
+            payments: payments.into_iter().map(PaymentResponse::from).collect(),
+        }
+    }
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct PaymentListResponse {
+    pub id: i32,
+    pub complement_id: i32,
+    pub invoice_id: i32,
+    pub payment_date: DateTime<Utc>,
+    pub payment_form: String,
+    pub currency: String,
+    pub exchange_rate: Option<f64>,
+    pub amount: f64,
+    pub operation_number: Option<String>,
+    pub ordering_account_issuer_tax_id: Option<String>,
+    pub bank_name: Option<String>,
+    pub ordering_account: Option<String>,
+    pub beneficiary_account_issuer_tax_id: Option<String>,
+    pub beneficiary_account: Option<String>,
+    pub total_transferred_tax: f64,
+    pub total_withheld_tax: f64,
+}
+
+impl From<InvoicePayment> for PaymentListResponse {
+    fn from(p: InvoicePayment) -> Self {
+        PaymentListResponse {
+            id: p.id,
+            complement_id: p.complement_id,
+            invoice_id: p.invoice_id,
+            payment_date: p.payment_date,
+            payment_form: p.payment_form,
+            currency: p.currency,
+            exchange_rate: p.exchange_rate,
+            amount: p.amount,
+            operation_number: p.operation_number,
+            ordering_account_issuer_tax_id: p.ordering_account_issuer_tax_id,
+            bank_name: p.bank_name,
+            ordering_account: p.ordering_account,
+            beneficiary_account_issuer_tax_id: p.beneficiary_account_issuer_tax_id,
+            beneficiary_account: p.beneficiary_account,
+            total_transferred_tax: p.total_transferred_tax,
+            total_withheld_tax: p.total_withheld_tax,
+        }
+    }
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct PaymentPage {
+    pub data: Vec<PaymentListResponse>,
+    pub total: i64,
+    pub page: i64,
+    pub per_page: i64,
+}
+
+#[derive(Serialize, ToSchema)]
 pub struct InvoiceItemTaxResponse {
     pub id: i32,
     pub tax_type: String,
@@ -280,6 +503,7 @@ pub struct InvoiceDetailResponse {
     pub created_at: DateTime<Utc>,
     pub items: Vec<InvoiceItemResponse>,
     pub related_documents: Vec<RelatedDocumentResponse>,
+    pub payment_complement: Option<PaymentComplementResponse>,
 }
 
 impl InvoiceDetailResponse {
@@ -287,6 +511,13 @@ impl InvoiceDetailResponse {
         inv: Invoice,
         items: Vec<(InvoiceItem, Vec<InvoiceItemTax>)>,
         related_documents: Vec<RelatedDocument>,
+        payment_complement: Option<(
+            PaymentComplement,
+            Vec<(
+                InvoicePayment,
+                Vec<(PaymentRelatedDocument, Vec<PaymentDocumentTax>)>,
+            )>,
+        )>,
     ) -> Self {
         InvoiceDetailResponse {
             id: inv.id,
@@ -329,6 +560,7 @@ impl InvoiceDetailResponse {
                 .into_iter()
                 .map(RelatedDocumentResponse::from)
                 .collect(),
+            payment_complement: payment_complement.map(PaymentComplementResponse::from),
         }
     }
 }
@@ -495,7 +727,22 @@ pub async fn get_invoice(
         }
     };
 
-    Json(InvoiceDetailResponse::from_parts(inv, items, related_documents)).into_response()
+    let payment_complement = match crate::repositories::invoice_payment::find_for_invoice(
+        &state.db,
+        invoice_id,
+        auth.user_id,
+    )
+    .await
+    {
+        Ok(pc) => pc,
+        Err(e) => {
+            tracing::error!("failed to fetch payment complement for invoice {invoice_id}: {e}");
+            return InvoiceError::Internal.into_response();
+        }
+    };
+
+    Json(InvoiceDetailResponse::from_parts(inv, items, related_documents, payment_complement))
+        .into_response()
 }
 
 #[utoipa::path(

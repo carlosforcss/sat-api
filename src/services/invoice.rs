@@ -9,6 +9,7 @@ use chrono::{TimeZone, Utc};
 use crate::repositories::files as files_repo;
 use crate::repositories::invoice::{self, Invoice, InvoiceFilters};
 use crate::repositories::invoice_item;
+use crate::repositories::invoice_payment;
 use crate::repositories::invoice_related_document;
 use crate::repositories::taxpayer::{self as taxpayer_repo, TaxpayerData};
 use crate::storage::S3Storage;
@@ -203,6 +204,16 @@ pub async fn parse_invoice(
                 );
                 return Err(InvoiceError::Internal);
             }
+            if let Some(pc) = cfdi.payments() {
+                if let Err(e) =
+                    invoice_payment::replace_for_invoice(pool, invoice_id, user_id, pc).await
+                {
+                    tracing::error!(
+                        "failed to persist payment complement for invoice {invoice_id}: {e}"
+                    );
+                    return Err(InvoiceError::Internal);
+                }
+            }
             Ok(serde_json::to_value(cfdi).unwrap())
         }
         Err(e) => {
@@ -300,6 +311,16 @@ pub async fn parse_all(
                             "bulk parse: failed to persist related documents for invoice {}: {e}",
                             inv.id
                         );
+                    }
+                    if let Some(pc) = cfdi.payments() {
+                        if let Err(e) =
+                            invoice_payment::replace_for_invoice(pool, inv.id, user_id, pc).await
+                        {
+                            tracing::error!(
+                                "bulk parse: failed to persist payment complement for invoice {}: {e}",
+                                inv.id
+                            );
+                        }
                     }
                 }
                 if parse_ok && items_ok {

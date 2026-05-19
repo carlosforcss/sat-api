@@ -3,6 +3,7 @@ pub mod crawl;
 pub mod credential;
 pub mod health;
 pub mod invoice;
+pub mod invoice_payment;
 pub mod link;
 pub mod taxpayer;
 
@@ -34,6 +35,8 @@ pub fn router() -> Router<AppState> {
             axum::routing::delete(credential::delete_credential),
         )
         .route("/invoices/parse-all", post(invoice::parse_all_invoices))
+        .route("/invoices/payments", get(invoice_payment::list_payments))
+        .route("/invoices/payments/{payment_id}", get(invoice_payment::get_payment))
         .route("/invoices", get(invoice::list_invoices))
         .route("/invoices/{invoice_id}", get(invoice::get_invoice))
         .route("/invoices/{invoice_id}/xml", get(invoice::get_invoice_xml))
