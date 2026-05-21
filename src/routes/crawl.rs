@@ -89,20 +89,13 @@ pub async fn list_crawls(
         status: params.status,
     };
 
-    match crawl_service::list(
-        &state.db,
-        auth.user_id,
-        filters,
-        params.page,
-        params.per_page,
-    )
-    .await
-    {
+    let (page, per_page, offset) = crate::services::paginate(params.page, params.per_page);
+    match crawl_service::list(&state.db, auth.user_id, filters, per_page, offset).await {
         Ok((crawls, total)) => Json(CrawlPage {
             data: crawls.into_iter().map(CrawlResponse::from).collect(),
             total,
-            page: params.page,
-            per_page: params.per_page,
+            page,
+            per_page,
         })
         .into_response(),
         Err(e) => e.into_response(),

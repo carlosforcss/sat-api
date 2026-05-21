@@ -11,7 +11,6 @@ use crate::{
     extractors::AuthUser,
     repositories::invoice_payment::PaymentFilters,
     routes::invoice::{PaymentListResponse, PaymentPage, PaymentResponse},
-    services::invoice::InvoiceError,
     AppState,
 };
 
@@ -46,7 +45,7 @@ pub async fn list_payments(
     auth: AuthUser,
     Query(params): Query<PaymentQueryParams>,
 ) -> Response {
-    let (_, per_page, offset) = crate::services::paginate(params.page, params.per_page);
+    let (page, per_page, offset) = crate::services::paginate(params.page, params.per_page);
 
     let filters = PaymentFilters {
         invoice_id: params.invoice_id,
@@ -58,26 +57,17 @@ pub async fn list_payments(
         amount_max: params.amount_max,
     };
 
-    match crate::repositories::invoice_payment::list_for_user(
-        &state.db,
-        auth.user_id,
-        filters,
-        per_page,
-        offset,
-    )
-    .await
+    match crate::services::invoice_payment::list(&state.db, auth.user_id, filters, per_page, offset)
+        .await
     {
         Ok((payments, total)) => Json(PaymentPage {
             data: payments.into_iter().map(PaymentListResponse::from).collect(),
             total,
-            page: params.page,
-            per_page: params.per_page,
+            page,
+            per_page,
         })
         .into_response(),
-        Err(e) => {
-            tracing::error!("failed to list payments: {e}");
-            InvoiceError::Internal.into_response()
-        }
+        Err(e) => e.into_response(),
     }
 }
 
@@ -98,18 +88,8 @@ pub async fn get_payment(
     auth: AuthUser,
     Path(payment_id): Path<i32>,
 ) -> Response {
-    match crate::repositories::invoice_payment::find_payment_for_user(
-        &state.db,
-        payment_id,
-        auth.user_id,
-    )
-    .await
-    {
-        Ok(Some(row)) => Json(PaymentResponse::from(row)).into_response(),
-        Ok(None) => InvoiceError::NotFound.into_response(),
-        Err(e) => {
-            tracing::error!("failed to fetch payment {payment_id}: {e}");
-            InvoiceError::Internal.into_response()
-        }
+    match crate::services::invoice_payment::get(&state.db, auth.user_id, payment_id).await {
+        Ok(row) => Json(PaymentResponse::from(row)).into_response(),
+        Err(e) => e.into_response(),
     }
 }

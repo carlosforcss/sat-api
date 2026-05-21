@@ -1,6 +1,6 @@
 use chrono::{DateTime, TimeZone, Utc};
 use sat_cfdi::PaymentsComplement;
-use sqlx::{FromRow, PgPool};
+use sqlx::{FromRow, PgPool, Postgres, QueryBuilder};
 
 #[derive(FromRow)]
 pub struct PaymentComplement {
@@ -185,7 +185,7 @@ pub async fn replace_for_invoice(
 
         for doc in &payment.related_documents {
             let related_invoice_id: Option<i32> = sqlx::query_scalar(
-                "SELECT id FROM invoices WHERE uuid = $1::uuid AND user_id = $2 LIMIT 1",
+                "SELECT id FROM invoices WHERE uuid = $1::UUID AND user_id = $2 LIMIT 1",
             )
             .bind(&doc.document_id)
             .bind(user_id)
@@ -220,7 +220,7 @@ pub async fn replace_for_invoice(
                      document_currency, exchange_equivalence, installment_number,
                      previous_balance, paid_amount, outstanding_balance, tax_object,
                      total_transferred_tax, total_withheld_tax)
-                 VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                 VALUES ($1, $2::UUID, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                  RETURNING id",
             )
             .bind(payment_id)
@@ -477,42 +477,51 @@ pub async fn list_for_user(
     limit: i64,
     offset: i64,
 ) -> Result<(Vec<InvoicePayment>, i64), sqlx::Error> {
-    let where_clause = "FROM invoice_payments p
-         JOIN invoice_payment_complements c ON c.id = p.complement_id
-         JOIN invoices inv ON inv.id = c.invoice_id
-         WHERE inv.user_id = $1
-           AND ($2::INT IS NULL OR p.invoice_id = $2)
-           AND ($3::TEXT IS NULL OR p.payment_form = $3)
-           AND ($4::TEXT IS NULL OR p.currency = $4)
-           AND ($5::TIMESTAMPTZ IS NULL OR p.payment_date >= $5)
-           AND ($6::TIMESTAMPTZ IS NULL OR p.payment_date <= $6)
-           AND ($7::FLOAT8 IS NULL OR p.amount >= $7)
-           AND ($8::FLOAT8 IS NULL OR p.amount <= $8)";
+    let apply_from_where = |qb: &mut QueryBuilder<'_, Postgres>| {
+        qb.push(
+            " FROM invoice_payments p
+              JOIN invoice_payment_complements c ON c.id = p.complement_id
+              JOIN invoices inv ON inv.id = c.invoice_id
+              WHERE inv.user_id = ",
+        )
+        .push_bind(user_id);
 
-    macro_rules! bind_filters {
-        ($q:expr) => {
-            $q.bind(user_id)
-                .bind(filters.invoice_id)
-                .bind(&filters.payment_form)
-                .bind(&filters.currency)
-                .bind(filters.date_from)
-                .bind(filters.date_to)
-                .bind(filters.amount_min)
-                .bind(filters.amount_max)
-        };
-    }
+        if let Some(v) = filters.invoice_id {
+            qb.push(" AND p.invoice_id = ").push_bind(v);
+        }
+        if let Some(v) = filters.payment_form.clone() {
+            qb.push(" AND p.payment_form = ").push_bind(v);
+        }
+        if let Some(v) = filters.currency.clone() {
+            qb.push(" AND p.currency = ").push_bind(v);
+        }
+        if let Some(v) = filters.date_from {
+            qb.push(" AND p.payment_date >= ").push_bind(v);
+        }
+        if let Some(v) = filters.date_to {
+            qb.push(" AND p.payment_date <= ").push_bind(v);
+        }
+        if let Some(v) = filters.amount_min {
+            qb.push(" AND p.amount >= ").push_bind(v);
+        }
+        if let Some(v) = filters.amount_max {
+            qb.push(" AND p.amount <= ").push_bind(v);
+        }
+    };
 
-    let total: i64 = bind_filters!(sqlx::query_scalar(&format!("SELECT COUNT(*) {where_clause}")))
-        .fetch_one(pool)
-        .await?;
+    let mut count_qb: QueryBuilder<Postgres> = QueryBuilder::new("SELECT COUNT(*)");
+    apply_from_where(&mut count_qb);
+    let total: i64 = count_qb.build_query_scalar().fetch_one(pool).await?;
 
-    let rows = bind_filters!(sqlx::query_as::<_, InvoicePayment>(&format!(
-        "SELECT {PAYMENT_COLUMNS} {where_clause} ORDER BY p.payment_date DESC, p.id LIMIT $9 OFFSET $10"
-    )))
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await?;
+    let mut select_qb: QueryBuilder<Postgres> =
+        QueryBuilder::new(format!("SELECT {PAYMENT_COLUMNS}"));
+    apply_from_where(&mut select_qb);
+    select_qb
+        .push(" ORDER BY p.payment_date DESC, p.id LIMIT ")
+        .push_bind(limit)
+        .push(" OFFSET ")
+        .push_bind(offset);
+    let rows: Vec<InvoicePayment> = select_qb.build_query_as().fetch_all(pool).await?;
 
     Ok((rows, total))
 }

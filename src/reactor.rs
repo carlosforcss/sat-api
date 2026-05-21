@@ -143,10 +143,9 @@ pub async fn on_xml_downloaded(
     tracing::info!(invoice_id, user_id, "reactor: xml_downloaded → parsing invoice");
     match crate::services::invoice::parse_invoice(pool, storage, user_id, invoice_id).await {
         Ok(_) => tracing::info!(invoice_id, "reactor: invoice parsed successfully"),
-        Err(crate::services::invoice::InvoiceError::ParseFailed(msg)) => tracing::warn!(
-            invoice_id,
-            "reactor: invoice parse failed: {msg}"
-        ),
+        Err(crate::error::ApiError::Unprocessable(msg)) => {
+            tracing::warn!(invoice_id, "reactor: invoice parse failed: {msg}")
+        }
         Err(_) => tracing::error!(invoice_id, "reactor: invoice parse error"),
     }
 }

@@ -1,45 +1,21 @@
 use std::sync::Arc;
 
-use axum::{http::StatusCode, response::IntoResponse, Json};
-use serde_json::json;
 use sqlx::PgPool;
 
 use chrono::{TimeZone, Utc};
 
+use crate::error::ApiError;
 use crate::repositories::files as files_repo;
 use crate::repositories::invoice::{self, Invoice, InvoiceFilters};
-use crate::repositories::invoice_item;
-use crate::repositories::invoice_payment;
-use crate::repositories::invoice_related_document;
+use crate::repositories::invoice_item::{self, InvoiceItem, InvoiceItemTax};
+use crate::repositories::invoice_payment::{
+    self as invoice_payment_repo, InvoicePayment, PaymentComplement, PaymentDocumentTax,
+    PaymentRelatedDocument,
+};
+use crate::repositories::invoice_related_document::{self, RelatedDocument};
 use crate::repositories::taxpayer::{self as taxpayer_repo, TaxpayerData};
 use crate::storage::S3Storage;
 use sat_cfdi;
-
-pub enum InvoiceError {
-    Internal,
-    NotFound,
-    ParseFailed(String),
-}
-
-impl IntoResponse for InvoiceError {
-    fn into_response(self) -> axum::response::Response {
-        match self {
-            InvoiceError::Internal => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "internal error" })),
-            )
-                .into_response(),
-            InvoiceError::NotFound => {
-                (StatusCode::NOT_FOUND, Json(json!({ "error": "not found" }))).into_response()
-            }
-            InvoiceError::ParseFailed(msg) => (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(json!({ "error": msg })),
-            )
-                .into_response(),
-        }
-    }
-}
 
 pub async fn get_invoice_file(
     pool: &PgPool,
@@ -47,14 +23,14 @@ pub async fn get_invoice_file(
     user_id: i32,
     invoice_id: i32,
     extension: &str,
-) -> Result<(Vec<u8>, String), InvoiceError> {
+) -> Result<(Vec<u8>, String), ApiError> {
     let inv = invoice::find_by_id_for_user(pool, invoice_id, user_id)
         .await
         .map_err(|e| {
             tracing::error!("failed to fetch invoice {invoice_id}: {e}");
-            InvoiceError::Internal
+            ApiError::Internal
         })?
-        .ok_or(InvoiceError::NotFound)?;
+        .ok_or(ApiError::NotFound("not found"))?;
 
     let file_id = if extension == "xml" {
         inv.xml_file_id
@@ -67,19 +43,19 @@ pub async fn get_invoice_file(
             .await
             .map_err(|e| {
                 tracing::error!("failed to fetch file record {id}: {e}");
-                InvoiceError::Internal
+                ApiError::Internal
             })?
-            .ok_or(InvoiceError::NotFound)?;
+            .ok_or(ApiError::NotFound("not found"))?;
 
         let bytes = storage.download(&file.s3_key).await.map_err(|e| {
             tracing::error!("failed to download {} from S3: {e}", file.s3_key);
-            InvoiceError::Internal
+            ApiError::Internal
         })?;
 
         return Ok((bytes, inv.uuid));
     }
 
-    Err(InvoiceError::NotFound)
+    Err(ApiError::NotFound("not found"))
 }
 
 async fn upsert_taxpayers(
@@ -146,6 +122,7 @@ fn cfdi_to_parsed_data(
     invoice::ParsedData {
         issuer_id,
         receiver_id,
+        invoice_type: cfdi.document_type.to_string(),
         version: cfdi.version.clone(),
         series: cfdi.series.clone(),
         payment_form: cfdi.payment_form.as_ref().map(|v| v.to_string()),
@@ -164,62 +141,50 @@ fn cfdi_to_parsed_data(
     }
 }
 
+async fn persist_parsed(
+    pool: &PgPool,
+    user_id: i32,
+    invoice_id: i32,
+    cfdi: &sat_cfdi::Invoice,
+) -> Result<(), sqlx::Error> {
+    let (issuer_id, receiver_id) = upsert_taxpayers(pool, user_id, cfdi).await;
+    invoice::set_parse_result(
+        pool,
+        invoice_id,
+        cfdi_to_parsed_data(cfdi, issuer_id, receiver_id),
+    )
+    .await?;
+    invoice_item::replace_for_invoice(pool, invoice_id, cfdi.line_items()).await?;
+    invoice_related_document::replace_for_invoice(pool, invoice_id, user_id, &cfdi.related_cfdis)
+        .await?;
+    if let Some(pc) = cfdi.payments() {
+        invoice_payment_repo::replace_for_invoice(pool, invoice_id, user_id, pc).await?;
+    }
+    Ok(())
+}
+
 pub async fn parse_invoice(
     pool: &PgPool,
     storage: Arc<S3Storage>,
     user_id: i32,
     invoice_id: i32,
-) -> Result<serde_json::Value, InvoiceError> {
+) -> Result<serde_json::Value, ApiError> {
     let (bytes, _uuid) = get_invoice_file(pool, storage, user_id, invoice_id, "xml").await?;
 
     match sat_cfdi::parse_bytes(&bytes) {
         Ok(cfdi) => {
-            let (issuer_id, receiver_id) = upsert_taxpayers(pool, user_id, &cfdi).await;
-            invoice::set_parse_result(
-                pool,
-                invoice_id,
-                cfdi_to_parsed_data(&cfdi, issuer_id, receiver_id),
-            )
-            .await
-            .map_err(|e| {
-                tracing::error!("failed to persist parse result for invoice {invoice_id}: {e}");
-                InvoiceError::Internal
-            })?;
-            if let Err(e) =
-                invoice_item::replace_for_invoice(pool, invoice_id, cfdi.line_items()).await
-            {
-                tracing::error!("failed to persist items for invoice {invoice_id}: {e}");
-                return Err(InvoiceError::Internal);
-            }
-            if let Err(e) = invoice_related_document::replace_for_invoice(
-                pool,
-                invoice_id,
-                user_id,
-                &cfdi.related_cfdis,
-            )
-            .await
-            {
-                tracing::error!(
-                    "failed to persist related documents for invoice {invoice_id}: {e}"
-                );
-                return Err(InvoiceError::Internal);
-            }
-            if let Some(pc) = cfdi.payments() {
-                if let Err(e) =
-                    invoice_payment::replace_for_invoice(pool, invoice_id, user_id, pc).await
-                {
-                    tracing::error!(
-                        "failed to persist payment complement for invoice {invoice_id}: {e}"
-                    );
-                    return Err(InvoiceError::Internal);
-                }
-            }
-            Ok(serde_json::to_value(cfdi).unwrap())
+            persist_parsed(pool, user_id, invoice_id, &cfdi)
+                .await
+                .map_err(|e| {
+                    tracing::error!("failed to persist parse result for invoice {invoice_id}: {e}");
+                    ApiError::Internal
+                })?;
+            Ok(serde_json::to_value(&cfdi).unwrap_or_else(|_| serde_json::json!({})))
         }
         Err(e) => {
             let msg = e.to_string();
             let _ = invoice::set_parse_error(pool, invoice_id, &msg).await;
-            Err(InvoiceError::ParseFailed(msg))
+            Err(ApiError::Unprocessable(msg))
         }
     }
 }
@@ -235,12 +200,12 @@ pub async fn parse_all(
     storage: Arc<S3Storage>,
     user_id: i32,
     force: bool,
-) -> Result<ParseAllResult, InvoiceError> {
+) -> Result<ParseAllResult, ApiError> {
     let invoices = invoice::list_with_xml_for_user(pool, user_id, force)
         .await
         .map_err(|e| {
             tracing::error!("failed to list invoices for bulk parse: {e}");
-            InvoiceError::Internal
+            ApiError::Internal
         })?;
 
     let mut succeeded = 0usize;
@@ -276,59 +241,13 @@ pub async fn parse_all(
             }
         };
         match sat_cfdi::parse_bytes(&bytes) {
-            Ok(cfdi) => {
-                let (issuer_id, receiver_id) = upsert_taxpayers(pool, user_id, &cfdi).await;
-                let parse_ok = invoice::set_parse_result(
-                    pool,
-                    inv.id,
-                    cfdi_to_parsed_data(&cfdi, issuer_id, receiver_id),
-                )
-                .await
-                .is_ok();
-                let items_ok = if parse_ok {
-                    invoice_item::replace_for_invoice(pool, inv.id, cfdi.line_items())
-                        .await
-                        .map_err(|e| {
-                            tracing::error!(
-                                "bulk parse: failed to persist items for invoice {}: {e}",
-                                inv.id
-                            )
-                        })
-                        .is_ok()
-                } else {
-                    false
-                };
-                if items_ok {
-                    if let Err(e) = invoice_related_document::replace_for_invoice(
-                        pool,
-                        inv.id,
-                        user_id,
-                        &cfdi.related_cfdis,
-                    )
-                    .await
-                    {
-                        tracing::error!(
-                            "bulk parse: failed to persist related documents for invoice {}: {e}",
-                            inv.id
-                        );
-                    }
-                    if let Some(pc) = cfdi.payments() {
-                        if let Err(e) =
-                            invoice_payment::replace_for_invoice(pool, inv.id, user_id, pc).await
-                        {
-                            tracing::error!(
-                                "bulk parse: failed to persist payment complement for invoice {}: {e}",
-                                inv.id
-                            );
-                        }
-                    }
-                }
-                if parse_ok && items_ok {
-                    succeeded += 1;
-                } else {
+            Ok(cfdi) => match persist_parsed(pool, user_id, inv.id, &cfdi).await {
+                Ok(()) => succeeded += 1,
+                Err(e) => {
+                    tracing::error!("bulk parse: failed to persist invoice {}: {e}", inv.id);
                     failed += 1;
                 }
-            }
+            },
             Err(e) => {
                 let _ = invoice::set_parse_error(pool, inv.id, &e.to_string()).await;
                 failed += 1;
@@ -343,28 +262,47 @@ pub async fn parse_all(
     })
 }
 
-pub async fn get(pool: &PgPool, user_id: i32, invoice_id: i32) -> Result<Invoice, InvoiceError> {
-    invoice::find_by_id_for_user(pool, invoice_id, user_id)
-        .await
-        .map_err(|e| {
-            tracing::error!("failed to fetch invoice {invoice_id}: {e}");
-            InvoiceError::Internal
-        })?
-        .ok_or(InvoiceError::NotFound)
+pub type InvoiceDetail = (
+    Invoice,
+    Vec<(InvoiceItem, Vec<InvoiceItemTax>)>,
+    Vec<RelatedDocument>,
+    Option<(
+        PaymentComplement,
+        Vec<(InvoicePayment, Vec<(PaymentRelatedDocument, Vec<PaymentDocumentTax>)>)>,
+    )>,
+);
+
+pub async fn get_detail(
+    pool: &PgPool,
+    user_id: i32,
+    invoice_id: i32,
+) -> Result<InvoiceDetail, ApiError> {
+    let (inv, items, related, payment) = tokio::try_join!(
+        invoice::find_by_id_for_user(pool, invoice_id, user_id),
+        invoice_item::list_for_invoice(pool, invoice_id, user_id),
+        invoice_related_document::list_for_invoice(pool, invoice_id, user_id),
+        invoice_payment_repo::find_for_invoice(pool, invoice_id, user_id),
+    )
+    .map_err(|e| {
+        tracing::error!("failed to fetch invoice detail {invoice_id}: {e}");
+        ApiError::Internal
+    })?;
+
+    let inv = inv.ok_or(ApiError::NotFound("not found"))?;
+    Ok((inv, items, related, payment))
 }
 
 pub async fn list(
     pool: &PgPool,
     user_id: i32,
     filters: InvoiceFilters,
-    page: i64,
     per_page: i64,
-) -> Result<(Vec<Invoice>, i64), InvoiceError> {
-    let (_, per_page, offset) = crate::services::paginate(page, per_page);
+    offset: i64,
+) -> Result<(Vec<Invoice>, i64), ApiError> {
     invoice::list_for_user(pool, user_id, filters, per_page, offset)
         .await
         .map_err(|e| {
             tracing::error!("failed to list invoices: {e}");
-            InvoiceError::Internal
+            ApiError::Internal
         })
 }

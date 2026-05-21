@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
-use sqlx::{FromRow, PgPool};
+use serde::Deserialize;
+use sqlx::{FromRow, PgPool, Postgres, QueryBuilder};
+use utoipa::IntoParams;
 
 #[derive(FromRow, Clone)]
 pub struct Invoice {
@@ -41,6 +43,7 @@ pub struct Invoice {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Deserialize, IntoParams)]
 pub struct InvoiceFilters {
     // existing
     pub issuer_taxpayer_id: Option<String>,
@@ -77,11 +80,17 @@ pub struct InvoiceFilters {
     pub issued_to: Option<DateTime<Utc>>,
     pub total_min: Option<f64>,
     pub total_max: Option<f64>,
+    // pagination (used by routes, ignored by the repo query)
+    #[serde(default = "crate::routes::default_page")]
+    pub page: i64,
+    #[serde(default = "crate::routes::default_per_page")]
+    pub per_page: i64,
 }
 
 pub struct ParsedData {
     pub issuer_id: Option<i32>,
     pub receiver_id: Option<i32>,
+    pub invoice_type: String,
     pub version: String,
     pub series: Option<String>,
     pub payment_form: Option<String>,
@@ -198,87 +207,113 @@ pub async fn list_for_user(
     limit: i64,
     offset: i64,
 ) -> Result<(Vec<Invoice>, i64), sqlx::Error> {
-    let where_clause = "WHERE user_id = $1
-        AND ($2::TEXT IS NULL OR issuer_taxpayer_id = $2)
-        AND ($3::TEXT IS NULL OR receiver_taxpayer_id = $3)
-        AND ($4::TEXT IS NULL OR invoice_type::TEXT = $4)
-        AND ($5::TEXT IS NULL OR invoice_status::TEXT = $5)
-        AND ($6::BOOL IS NULL OR ($6 = TRUE AND xml_file_id IS NOT NULL) OR ($6 = FALSE AND xml_file_id IS NULL))
-        AND ($7::BOOL IS NULL OR ($7 = TRUE AND pdf_file_id IS NOT NULL) OR ($7 = FALSE AND pdf_file_id IS NULL))
-        AND ($8::TEXT IS NULL OR uuid::TEXT = $8)
-        AND ($9::TEXT IS NULL OR fiscal_id = $9)
-        AND ($10::TEXT IS NULL OR issuer_name ILIKE '%' || $10 || '%')
-        AND ($11::TEXT IS NULL OR receiver_name ILIKE '%' || $11 || '%')
-        AND ($12::TEXT IS NULL OR version = $12)
-        AND ($13::TEXT IS NULL OR series = $13)
-        AND ($14::TEXT IS NULL OR payment_form = $14)
-        AND ($15::TEXT IS NULL OR currency = $15)
-        AND ($16::TEXT IS NULL OR export = $16)
-        AND ($17::TEXT IS NULL OR payment_method = $17)
-        AND ($18::TEXT IS NULL OR issue_place = $18)
-        AND ($19::TEXT IS NULL OR cfdi_use = $19)
-        AND ($20::TEXT IS NULL OR issuer_fiscal_regime = $20)
-        AND ($21::TEXT IS NULL OR recipient_fiscal_regime = $21)
-        AND ($22::BOOL IS NULL OR parsed = $22)
-        AND ($23::INT IS NULL OR issuer_id = $23)
-        AND ($24::INT IS NULL OR receiver_id = $24)
-        AND ($25::TIMESTAMPTZ IS NULL OR issued_at >= $25)
-        AND ($26::TIMESTAMPTZ IS NULL OR issued_at <= $26)
-        AND ($27::FLOAT8 IS NULL OR total >= $27)
-        AND ($28::FLOAT8 IS NULL OR total <= $28)
-        AND ($29::INT IS NULL OR issuer_id = $29 OR receiver_id = $29)";
+    let apply_where = |qb: &mut QueryBuilder<'_, Postgres>| {
+        qb.push(" WHERE user_id = ").push_bind(user_id);
 
-    macro_rules! bind_filters {
-        ($q:expr, $f:expr) => {
-            $q.bind(user_id)
-                .bind(&$f.issuer_taxpayer_id)
-                .bind(&$f.receiver_taxpayer_id)
-                .bind(&$f.invoice_type)
-                .bind(&$f.invoice_status)
-                .bind($f.has_xml)
-                .bind($f.has_pdf)
-                .bind(&$f.uuid)
-                .bind(&$f.fiscal_id)
-                .bind(&$f.issuer_name)
-                .bind(&$f.receiver_name)
-                .bind(&$f.version)
-                .bind(&$f.series)
-                .bind(&$f.payment_form)
-                .bind(&$f.currency)
-                .bind(&$f.export)
-                .bind(&$f.payment_method)
-                .bind(&$f.issue_place)
-                .bind(&$f.cfdi_use)
-                .bind(&$f.issuer_fiscal_regime)
-                .bind(&$f.recipient_fiscal_regime)
-                .bind($f.parsed)
-                .bind($f.issuer_id)
-                .bind($f.receiver_id)
-                .bind($f.issued_from)
-                .bind($f.issued_to)
-                .bind($f.total_min)
-                .bind($f.total_max)
-                .bind($f.taxpayer_id)
-        };
-    }
+        if let Some(v) = filters.issuer_taxpayer_id.clone() {
+            qb.push(" AND issuer_taxpayer_id = ").push_bind(v);
+        }
+        if let Some(v) = filters.receiver_taxpayer_id.clone() {
+            qb.push(" AND receiver_taxpayer_id = ").push_bind(v);
+        }
+        if let Some(v) = filters.invoice_type.clone() {
+            qb.push(" AND invoice_type::TEXT = ").push_bind(v);
+        }
+        if let Some(v) = filters.invoice_status.clone() {
+            qb.push(" AND invoice_status::TEXT = ").push_bind(v);
+        }
+        if let Some(v) = filters.has_xml {
+            qb.push(if v { " AND xml_file_id IS NOT NULL" } else { " AND xml_file_id IS NULL" });
+        }
+        if let Some(v) = filters.has_pdf {
+            qb.push(if v { " AND pdf_file_id IS NOT NULL" } else { " AND pdf_file_id IS NULL" });
+        }
+        if let Some(v) = filters.uuid.clone() {
+            qb.push(" AND uuid::TEXT = ").push_bind(v);
+        }
+        if let Some(v) = filters.fiscal_id.clone() {
+            qb.push(" AND fiscal_id = ").push_bind(v);
+        }
+        if let Some(v) = &filters.issuer_name {
+            qb.push(" AND issuer_name ILIKE ").push_bind(format!("%{v}%"));
+        }
+        if let Some(v) = &filters.receiver_name {
+            qb.push(" AND receiver_name ILIKE ").push_bind(format!("%{v}%"));
+        }
+        if let Some(v) = filters.version.clone() {
+            qb.push(" AND version = ").push_bind(v);
+        }
+        if let Some(v) = filters.series.clone() {
+            qb.push(" AND series = ").push_bind(v);
+        }
+        if let Some(v) = filters.payment_form.clone() {
+            qb.push(" AND payment_form = ").push_bind(v);
+        }
+        if let Some(v) = filters.currency.clone() {
+            qb.push(" AND currency = ").push_bind(v);
+        }
+        if let Some(v) = filters.export.clone() {
+            qb.push(" AND export = ").push_bind(v);
+        }
+        if let Some(v) = filters.payment_method.clone() {
+            qb.push(" AND payment_method = ").push_bind(v);
+        }
+        if let Some(v) = filters.issue_place.clone() {
+            qb.push(" AND issue_place = ").push_bind(v);
+        }
+        if let Some(v) = filters.cfdi_use.clone() {
+            qb.push(" AND cfdi_use = ").push_bind(v);
+        }
+        if let Some(v) = filters.issuer_fiscal_regime.clone() {
+            qb.push(" AND issuer_fiscal_regime = ").push_bind(v);
+        }
+        if let Some(v) = filters.recipient_fiscal_regime.clone() {
+            qb.push(" AND recipient_fiscal_regime = ").push_bind(v);
+        }
+        if let Some(v) = filters.parsed {
+            qb.push(" AND parsed = ").push_bind(v);
+        }
+        if let Some(v) = filters.issuer_id {
+            qb.push(" AND issuer_id = ").push_bind(v);
+        }
+        if let Some(v) = filters.receiver_id {
+            qb.push(" AND receiver_id = ").push_bind(v);
+        }
+        if let Some(v) = filters.issued_from {
+            qb.push(" AND issued_at >= ").push_bind(v);
+        }
+        if let Some(v) = filters.issued_to {
+            qb.push(" AND issued_at <= ").push_bind(v);
+        }
+        if let Some(v) = filters.total_min {
+            qb.push(" AND total >= ").push_bind(v);
+        }
+        if let Some(v) = filters.total_max {
+            qb.push(" AND total <= ").push_bind(v);
+        }
+        if let Some(v) = filters.taxpayer_id {
+            qb.push(" AND (issuer_id = ")
+                .push_bind(v)
+                .push(" OR receiver_id = ")
+                .push_bind(v)
+                .push(")");
+        }
+    };
 
-    let total: i64 = bind_filters!(
-        sqlx::query_scalar(&format!("SELECT COUNT(*) FROM invoices {where_clause}")),
-        filters
-    )
-    .fetch_one(pool)
-    .await?;
+    let mut count_qb: QueryBuilder<Postgres> =
+        QueryBuilder::new("SELECT COUNT(*) FROM invoices");
+    apply_where(&mut count_qb);
+    let total: i64 = count_qb.build_query_scalar().fetch_one(pool).await?;
 
-    let rows = bind_filters!(
-        sqlx::query_as::<_, Invoice>(&format!(
-            "SELECT {SELECT_COLUMNS} FROM invoices {where_clause} ORDER BY issued_at DESC LIMIT $30 OFFSET $31"
-        )),
-        filters
-    )
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await?;
+    let mut select_qb: QueryBuilder<Postgres> =
+        QueryBuilder::new(format!("SELECT {SELECT_COLUMNS} FROM invoices"));
+    apply_where(&mut select_qb);
+    select_qb
+        .push(" ORDER BY issued_at DESC LIMIT ")
+        .push_bind(limit)
+        .push(" OFFSET ")
+        .push_bind(offset);
+    let rows: Vec<Invoice> = select_qb.build_query_as().fetch_all(pool).await?;
 
     Ok((rows, total))
 }
@@ -327,16 +362,18 @@ pub async fn set_parse_result(pool: &PgPool, id: i32, data: ParsedData) -> Resul
         "UPDATE invoices SET
             parsed = TRUE, parsing_error = NULL,
             issuer_id = $2, receiver_id = $3,
-            version = $4, series = $5, payment_form = $6, payment_conditions = $7,
-            subtotal = $8, discount = $9, currency = $10, exchange_rate = $11,
-            export = $12, payment_method = $13, issue_place = $14,
-            certificate_number = $15, cfdi_use = $16,
-            issuer_fiscal_regime = $17, recipient_fiscal_regime = $18
+            invoice_type = $4::invoice_type_enum,
+            version = $5, series = $6, payment_form = $7, payment_conditions = $8,
+            subtotal = $9, discount = $10, currency = $11, exchange_rate = $12,
+            export = $13, payment_method = $14, issue_place = $15,
+            certificate_number = $16, cfdi_use = $17,
+            issuer_fiscal_regime = $18, recipient_fiscal_regime = $19
          WHERE id = $1",
     )
     .bind(id)
     .bind(data.issuer_id)
     .bind(data.receiver_id)
+    .bind(data.invoice_type)
     .bind(data.version)
     .bind(data.series)
     .bind(data.payment_form)

@@ -2,6 +2,7 @@ pub mod auth;
 pub mod crawl;
 pub mod credential;
 pub mod invoice;
+pub mod invoice_payment;
 pub mod link;
 pub mod taxpayer;
 

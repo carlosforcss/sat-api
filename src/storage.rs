@@ -10,6 +10,8 @@ impl std::fmt::Display for StorageError {
     }
 }
 
+impl std::error::Error for StorageError {}
+
 #[derive(Clone)]
 pub struct S3Storage {
     client: aws_sdk_s3::Client,

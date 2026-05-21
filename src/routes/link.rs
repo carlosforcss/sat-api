@@ -65,12 +65,13 @@ pub async fn list_links(
     auth: AuthUser,
     Query(params): Query<LinkQueryParams>,
 ) -> Response {
-    match link_service::list(&state.db, auth.user_id, params.page, params.per_page).await {
+    let (page, per_page, offset) = crate::services::paginate(params.page, params.per_page);
+    match link_service::list(&state.db, auth.user_id, per_page, offset).await {
         Ok((links, total)) => Json(LinkPage {
             data: links.into_iter().map(LinkResponse::from).collect(),
             total,
-            page: params.page,
-            per_page: params.per_page,
+            page,
+            per_page,
         })
         .into_response(),
         Err(e) => e.into_response(),

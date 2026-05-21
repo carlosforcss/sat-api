@@ -97,6 +97,15 @@ impl DownloadEventHandler {
             }
         };
 
+        let invoice_type_lc = invoice.invoice_type.to_lowercase();
+        let invoice_type = match invoice_type_lc.as_str() {
+            "ingreso"  => "I",
+            "egreso"   => "E",
+            "traslado" => "T",
+            "pago"     => "P",
+            "nómina" | "nomina" => "N",
+            other => other,
+        };
         let db_invoice = match invoice_repo::create(
             &self.pool,
             self.user_id,
@@ -110,7 +119,7 @@ impl DownloadEventHandler {
             issued_at,
             certified_at,
             total,
-            &invoice.invoice_type.to_lowercase(),
+            invoice_type,
             &invoice.invoice_status.to_lowercase(),
         )
         .await

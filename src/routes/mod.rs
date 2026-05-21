@@ -16,11 +16,15 @@ pub fn default_per_page() -> i64 {
 }
 
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post},
     Router,
 };
 
 use crate::AppState;
+
+/// Cap for FIEL multipart uploads (cert + key files are < 10 KB each in practice).
+const FIEL_UPLOAD_MAX_BYTES: usize = 1024 * 1024;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -28,7 +32,10 @@ pub fn router() -> Router<AppState> {
         .route("/auth/register", post(auth::register))
         .route("/auth/login", post(auth::login))
         .route("/credentials/ciec", post(credential::create_ciec))
-        .route("/credentials/fiel", post(credential::create_fiel))
+        .route(
+            "/credentials/fiel",
+            post(credential::create_fiel).layer(DefaultBodyLimit::max(FIEL_UPLOAD_MAX_BYTES)),
+        )
         .route("/credentials", get(credential::list_credentials))
         .route(
             "/credentials/{id}",

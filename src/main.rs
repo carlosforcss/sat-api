@@ -8,6 +8,7 @@ use utoipa::{
 
 mod crawlers;
 mod crypto;
+mod error;
 mod extractors;
 mod reactor;
 mod repositories;
@@ -87,6 +88,7 @@ impl Modify for BearerAuth {
         routes::invoice::InvoiceDetailResponse,
         routes::invoice::InvoiceItemResponse,
         routes::invoice::InvoiceItemTaxResponse,
+        routes::invoice::RelatedDocumentResponse,
         routes::invoice::ParseAllResponse,
         routes::invoice::PaymentComplementResponse,
         routes::invoice::PaymentResponse,

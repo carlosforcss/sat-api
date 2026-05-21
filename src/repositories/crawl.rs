@@ -16,6 +16,9 @@ pub struct Crawl {
     pub updated_at: DateTime<Utc>,
 }
 
+const SELECT_COLUMNS: &str = "id, user_id, link_id, crawl_type::TEXT, status::TEXT, params,
+    response_message, started_at, finished_at, created_at, updated_at";
+
 pub async fn create(
     pool: &PgPool,
     user_id: i32,
@@ -23,12 +26,11 @@ pub async fn create(
     crawl_type: &str,
     params: serde_json::Value,
 ) -> Result<Crawl, sqlx::Error> {
-    sqlx::query_as::<_, Crawl>(
+    sqlx::query_as::<_, Crawl>(&format!(
         "INSERT INTO crawls (user_id, link_id, crawl_type, params)
          VALUES ($1, $2, $3::crawl_type, $4)
-         RETURNING id, user_id, link_id, crawl_type::TEXT, status::TEXT, params,
-                   response_message, started_at, finished_at, created_at, updated_at",
-    )
+         RETURNING {SELECT_COLUMNS}"
+    ))
     .bind(user_id)
     .bind(link_id)
     .bind(crawl_type)
@@ -38,11 +40,9 @@ pub async fn create(
 }
 
 pub async fn find_by_id(pool: &PgPool, id: i32) -> Result<Option<Crawl>, sqlx::Error> {
-    sqlx::query_as::<_, Crawl>(
-        "SELECT id, user_id, link_id, crawl_type::TEXT, status::TEXT, params,
-                response_message, started_at, finished_at, created_at, updated_at
-         FROM crawls WHERE id = $1",
-    )
+    sqlx::query_as::<_, Crawl>(&format!(
+        "SELECT {SELECT_COLUMNS} FROM crawls WHERE id = $1"
+    ))
     .bind(id)
     .fetch_optional(pool)
     .await
@@ -84,33 +84,24 @@ pub async fn list_for_user(
     limit: i64,
     offset: i64,
 ) -> Result<(Vec<Crawl>, i64), sqlx::Error> {
-    let total: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)
-         FROM crawls
-         WHERE user_id = $1
-           AND ($2::INT IS NULL OR link_id = $2)
-           AND ($3::TEXT IS NULL OR crawl_type::TEXT = $3)
-           AND ($4::TEXT IS NULL OR status::TEXT = $4)",
-    )
-    .bind(user_id)
-    .bind(link_id_filter)
-    .bind(crawl_type_filter)
-    .bind(status_filter)
-    .fetch_one(pool)
-    .await?;
+    let where_clause = "WHERE user_id = $1
+       AND ($2::INT IS NULL OR link_id = $2)
+       AND ($3::TEXT IS NULL OR crawl_type::TEXT = $3)
+       AND ($4::TEXT IS NULL OR status::TEXT = $4)";
 
-    let rows = sqlx::query_as::<_, Crawl>(
-        "SELECT id, user_id, link_id, crawl_type::TEXT, status::TEXT,
-                params, response_message, started_at, finished_at,
-                created_at, updated_at
-         FROM crawls
-         WHERE user_id = $1
-           AND ($2::INT IS NULL OR link_id = $2)
-           AND ($3::TEXT IS NULL OR crawl_type::TEXT = $3)
-           AND ($4::TEXT IS NULL OR status::TEXT = $4)
-         ORDER BY created_at DESC
-         LIMIT $5 OFFSET $6",
-    )
+    let total: i64 =
+        sqlx::query_scalar(&format!("SELECT COUNT(*) FROM crawls {where_clause}"))
+            .bind(user_id)
+            .bind(link_id_filter)
+            .bind(crawl_type_filter)
+            .bind(status_filter)
+            .fetch_one(pool)
+            .await?;
+
+    let rows = sqlx::query_as::<_, Crawl>(&format!(
+        "SELECT {SELECT_COLUMNS} FROM crawls {where_clause}
+         ORDER BY created_at DESC LIMIT $5 OFFSET $6"
+    ))
     .bind(user_id)
     .bind(link_id_filter)
     .bind(crawl_type_filter)
@@ -128,13 +119,9 @@ pub async fn find_by_id_for_user(
     id: i32,
     user_id: i32,
 ) -> Result<Option<Crawl>, sqlx::Error> {
-    sqlx::query_as::<_, Crawl>(
-        "SELECT id, user_id, link_id, crawl_type::TEXT, status::TEXT,
-                params, response_message, started_at, finished_at,
-                created_at, updated_at
-         FROM crawls
-         WHERE id = $1 AND user_id = $2",
-    )
+    sqlx::query_as::<_, Crawl>(&format!(
+        "SELECT {SELECT_COLUMNS} FROM crawls WHERE id = $1 AND user_id = $2"
+    ))
     .bind(id)
     .bind(user_id)
     .fetch_optional(pool)

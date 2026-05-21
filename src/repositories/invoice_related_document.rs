@@ -26,7 +26,7 @@ pub async fn replace_for_invoice(
         let relation_type = group.relation_type.to_string();
         for item in &group.items {
             let related_invoice_id: Option<i32> = sqlx::query_scalar(
-                "SELECT id FROM invoices WHERE uuid = $1::uuid AND user_id = $2 LIMIT 1",
+                "SELECT id FROM invoices WHERE uuid = $1::UUID AND user_id = $2 LIMIT 1",
             )
             .bind(&item.uuid)
             .bind(user_id)
@@ -36,7 +36,7 @@ pub async fn replace_for_invoice(
             sqlx::query(
                 "INSERT INTO invoice_related_documents
                     (invoice_id, relation_type, related_uuid, related_invoice_id)
-                 VALUES ($1, $2, $3::uuid, $4)",
+                 VALUES ($1, $2, $3::UUID, $4)",
             )
             .bind(invoice_id)
             .bind(&relation_type)

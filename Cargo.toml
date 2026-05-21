@@ -30,6 +30,7 @@ base64 = "0.22"
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-s3 = "1"
 tower-http = { version = "0.6.8", features = ["cors"] }
+thiserror = "1"
 
 [profile.dev.package.chromiumoxide_cdp]
 debug = 0

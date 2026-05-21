@@ -1,10 +1,9 @@
 use std::sync::{Arc, OnceLock};
 
-use axum::{http::StatusCode, response::IntoResponse, Json};
-use serde_json::json;
 use sqlx::PgPool;
 use tokio::sync::Semaphore;
 
+use crate::error::ApiError;
 use crate::repositories::crawl::Crawl;
 use crate::repositories::{crawl, link};
 use crate::storage::S3Storage;
@@ -16,21 +15,6 @@ fn crawl_semaphore() -> Arc<Semaphore> {
     CRAWL_SEMAPHORE
         .get_or_init(|| Arc::new(Semaphore::new(MAX_CONCURRENT_CRAWLS)))
         .clone()
-}
-
-pub enum CrawlError {
-    NotFound,
-    Internal,
-}
-
-impl IntoResponse for CrawlError {
-    fn into_response(self) -> axum::response::Response {
-        let (status, message) = match self {
-            CrawlError::NotFound => (StatusCode::NOT_FOUND, "crawl not found"),
-            CrawlError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
-        };
-        (status, Json(json!({ "error": message }))).into_response()
-    }
 }
 
 pub struct CrawlFilters {
@@ -46,17 +30,17 @@ pub async fn create(
     link_id: i32,
     crawl_type: &str,
     params: serde_json::Value,
-) -> Result<Crawl, CrawlError> {
+) -> Result<Crawl, ApiError> {
     link::find_by_id_and_user(pool, link_id, user_id)
         .await
-        .map_err(|_| CrawlError::Internal)?
-        .ok_or(CrawlError::NotFound)?;
+        .map_err(|_| ApiError::Internal)?
+        .ok_or(ApiError::NotFound("crawl not found"))?;
 
     let crawl = crawl::create(pool, user_id, link_id, crawl_type, params)
         .await
         .map_err(|e| {
             tracing::error!("failed to create crawl: {e}");
-            CrawlError::Internal
+            ApiError::Internal
         })?;
 
     spawn(pool, crawl.id, storage);
@@ -84,10 +68,9 @@ pub async fn list(
     pool: &PgPool,
     user_id: i32,
     filters: CrawlFilters,
-    page: i64,
     per_page: i64,
-) -> Result<(Vec<Crawl>, i64), CrawlError> {
-    let (_, per_page, offset) = crate::services::paginate(page, per_page);
+    offset: i64,
+) -> Result<(Vec<Crawl>, i64), ApiError> {
     crawl::list_for_user(
         pool,
         user_id,
@@ -98,12 +81,12 @@ pub async fn list(
         offset,
     )
     .await
-    .map_err(|_| CrawlError::Internal)
+    .map_err(|_| ApiError::Internal)
 }
 
-pub async fn get(pool: &PgPool, crawl_id: i32, user_id: i32) -> Result<Crawl, CrawlError> {
+pub async fn get(pool: &PgPool, crawl_id: i32, user_id: i32) -> Result<Crawl, ApiError> {
     crawl::find_by_id_for_user(pool, crawl_id, user_id)
         .await
-        .map_err(|_| CrawlError::Internal)?
-        .ok_or(CrawlError::NotFound)
+        .map_err(|_| ApiError::Internal)?
+        .ok_or(ApiError::NotFound("crawl not found"))
 }

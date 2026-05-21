@@ -52,14 +52,8 @@ impl FromRequestParts<AppState> for AuthUser {
                 .into_response()
         })?;
 
-        let user_id: i32 = token_data.claims.sub.parse().map_err(|_| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": "invalid token claims" })),
-            )
-                .into_response()
-        })?;
-
-        Ok(AuthUser { user_id })
+        Ok(AuthUser {
+            user_id: token_data.claims.sub,
+        })
     }
 }
